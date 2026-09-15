@@ -29,11 +29,11 @@ const MainAppContent: React.FC = () => {
       case 'plans':
         return <PlansView />;
       case 'computer':
-        return <DashboardView />;
+        return <ComputerView />;
       case 'languages':
         return <LanguagesView />;
       case 'history':
-        return <DashboardView />;
+        return <HistoryView />;
       case 'profile':
         return <ProfileView />;
       case 'settings':

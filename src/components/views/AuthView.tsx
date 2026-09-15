@@ -6,7 +6,6 @@ import {
   Mail,
   ArrowRight,
   Globe,
-  RefreshCw,
   ExternalLink,
 } from 'lucide-react';
 
@@ -17,8 +16,6 @@ export const AuthView: React.FC = () => {
     requestPasswordReset,
     openLegalModal,
     addToast,
-    webBrowserLoginSync,
-    isSyncingWithWeb,
   } = useApp();
 
   const [mode, setMode] = useState<'login' | 'forgot'>('login');
@@ -40,18 +37,10 @@ export const AuthView: React.FC = () => {
     }
 
     setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 600));
     const result = await login(loginEmail, loginPassword);
     setIsLoading(false);
     if (!result.success && result.error) {
       addToast('error', 'Falha no Acesso', result.error);
-    }
-  };
-
-  const handleWebSessionSync = async () => {
-    const res = await webBrowserLoginSync();
-    if (!res.success && res.error) {
-      addToast('error', 'Falha na Sincronização', res.error);
     }
   };
 
@@ -61,12 +50,12 @@ export const AuthView: React.FC = () => {
     try {
       window.open(websiteRegisterUrl, '_blank', 'noopener,noreferrer');
     } catch {
-      // Ignora restrições do navegador
+      // Ignora restrições de popups
     }
     addToast(
       'info',
       'Criação de Conta no Site',
-      'Redirecionando para o menu de criação de conta no site oficial. Link e informações serão integrados com o sistema.'
+      'Redirecionando para o menu de criação de conta no site oficial do DYARTE OPTIMIZER.'
     );
   };
 
@@ -111,50 +100,19 @@ export const AuthView: React.FC = () => {
         <div className="flex items-center justify-center gap-2 p-2.5 rounded-xl bg-[#12121a] border border-[#20202e] text-center shadow-md">
           <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
           <p className="text-[11px] text-zinc-300 font-mono">
-            <span className="text-white font-semibold">Sincronização 100% Web:</span> Planos vinculados à sua conta no site, sem chaves seriais.
+            <span className="text-white font-semibold">Autenticação Oficial:</span> Planos vinculados à sua conta no site, sincronizados em tempo real.
           </p>
         </div>
 
         {/* Main Card */}
         <div className="p-6 md:p-8 rounded-2xl bg-[#111118] border border-[#232332] shadow-2xl relative z-10 space-y-5">
-          {/* Primary Quick Web Sync Button */}
-          <button
-            type="button"
-            onClick={handleWebSessionSync}
-            disabled={isSyncingWithWeb}
-            className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#1c1c28] via-[#242436] to-[#1c1c28] hover:from-[#232333] hover:to-[#232333] border border-zinc-700/80 hover:border-emerald-500/60 text-white transition-all flex items-center justify-between group cursor-pointer shadow-md"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform">
-                <RefreshCw className={`w-4 h-4 ${isSyncingWithWeb ? 'animate-spin' : ''}`} />
-              </div>
-              <div className="text-left">
-                <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block leading-none mb-0.5">
-                  1-Click Web Sync
-                </span>
-                <span className="text-xs font-bold text-white block">
-                  Sincronizar com Sessão do Site
-                </span>
-              </div>
-            </div>
-            <ArrowRight className="w-4 h-4 text-zinc-400 group-hover:text-white group-hover:translate-x-0.5 transition-all" />
-          </button>
-
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-zinc-800" />
-            <span className="text-[10px] font-mono uppercase text-zinc-500">
-              Ou acesse com credenciais
-            </span>
-            <div className="h-px flex-1 bg-zinc-800" />
-          </div>
-
-          {/* Tabs: ENTRAR NA CONTA e CRIAR CONTA */}
+          {/* Options: ENTRAR NA CONTA e CRIAR CONTA */}
           {mode !== 'forgot' && (
             <div className="flex rounded-xl bg-[#09090d] p-1 border border-[#1e1e2b]">
               <button
                 type="button"
                 onClick={() => setMode('login')}
-                className={`flex-1 py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                className={`flex-1 py-2.5 text-xs font-mono font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
                   mode === 'login'
                     ? 'bg-[#E00000] text-white shadow-md'
                     : 'text-zinc-400 hover:text-white'
@@ -165,11 +123,11 @@ export const AuthView: React.FC = () => {
               <button
                 type="button"
                 onClick={handleCreateAccountClick}
-                className="flex-1 py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer text-zinc-400 hover:text-white hover:bg-zinc-800/50 flex items-center justify-center gap-1.5"
+                className="flex-1 py-2.5 text-xs font-mono font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer text-zinc-400 hover:text-white hover:bg-zinc-800/50 flex items-center justify-center gap-1.5"
                 title="Criar conta no site oficial do DYARTE OPTIMIZER"
               >
                 <span>CRIAR CONTA</span>
-                <ExternalLink className="w-3 h-3 text-zinc-500" />
+                <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
               </button>
             </div>
           )}

@@ -14,7 +14,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.role != null && request.auth.token.role == 'ADMIN') ||
         (request.auth.token.email != null && request.auth.token.email.lower() == 'kelberduarte22@gmail.com')
       );
     }
@@ -32,20 +32,35 @@ service cloud.firestore {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
       allow create: if isSignedIn() && (
-        (isOwner(userId) && request.resource.data.role == 'USER' && request.resource.data.nivel_plano <= 3) ||
+        (
+          isOwner(userId) &&
+          request.resource.data.role == 'USER' &&
+          request.resource.data.nivel_plano == 1 &&
+          request.resource.data.status_plano == 'ATIVO' &&
+          (!('status_licenca' in request.resource.data) || request.resource.data.status_licenca in ['INATIVA', 'PENDENTE', 'SEM_LICENCA']) &&
+          (!('license_id' in request.resource.data) || request.resource.data.license_id == null || request.resource.data.license_id == '')
+        ) ||
         isAdmin()
       );
       allow update: if isAdmin() || (
         isOwner(userId) &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'nivel_plano', 'status_plano', 'license_id', 'status_licenca', 'status'])
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'role',
+          'nivel_plano',
+          'status_plano',
+          'license_id',
+          'status_licenca',
+          'status',
+          'data_expiracao',
+          'data_inicio'
+        ])
       );
       allow delete: if isAdmin();
     }
 
-    // Admin Whitelist
+    // Admin Whitelist (Strictly restricted to Admin authority)
     match /admins/{adminId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     // Licenses Collection

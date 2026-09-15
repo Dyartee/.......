@@ -137,7 +137,6 @@ export interface AppConfig {
   complete_checkout_url: string;
   support_email: string;
   discord_url: string;
-  webhook_secret: string;
   agent_download_url: string;
   app_version: string;
   require_agent_connection: boolean;

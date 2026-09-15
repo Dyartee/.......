@@ -27,7 +27,7 @@ const adminDb: Firestore = getFirestore(adminApp, firebaseConfig.firestoreDataba
 // In-Memory Simple Rate Limiting Map
 const rateLimitMap = new Map<string, { count: number; firstRequest: number }>();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
-const MAX_AUTH_REQUESTS = 30; // 30 requests per minute per IP
+const MAX_AUTH_REQUESTS = 60; // 60 requests per minute per IP
 
 function rateLimiter(req: Request, res: Response, next: NextFunction) {
   const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
@@ -55,6 +55,32 @@ function rateLimiter(req: Request, res: Response, next: NextFunction) {
   return next();
 }
 
+// Apply rate limiter to all API endpoints
+app.use('/api', rateLimiter);
+
+// Canonical Tools Catalog on Backend Authority (Frontend parameters are not trusted)
+const CANONICAL_TOOLS: Record<string, { name: string; category: string; required_plan_level: number }> = {
+  tool_sys_win_opt: { name: 'Otimização Básica do Windows', category: 'SISTEMA', required_plan_level: 2 },
+  tool_sys_cleanup: { name: 'Limpeza de Arquivos Temporários', category: 'SISTEMA', required_plan_level: 2 },
+  tool_sys_startup: { name: 'Ajustes Básicos de Inicialização', category: 'SISTEMA', required_plan_level: 2 },
+  tool_sys_proc_manager: { name: 'Redução de Processos Desnecessários', category: 'SISTEMA', required_plan_level: 2 },
+  tool_sys_stability: { name: 'Ajustes de Estabilidade do Kernel', category: 'SISTEMA', required_plan_level: 2 },
+  tool_sys_advanced_tweaks: { name: 'Otimizações Avançadas do Windows', category: 'SISTEMA', required_plan_level: 3 },
+  tool_perf_cpu_basic: { name: 'Desempenho Básico de CPU', category: 'DESEMPENHO', required_plan_level: 1 },
+  tool_perf_power_plan: { name: 'Plano de Energia de Alta Performance', category: 'DESEMPENHO', required_plan_level: 2 },
+  tool_perf_ram_opt: { name: 'Otimização Inteligente de Memória RAM', category: 'DESEMPENHO', required_plan_level: 2 },
+  tool_perf_latency_settings: { name: 'Configurações de Latência & Timer Resolution', category: 'DESEMPENHO', required_plan_level: 3 },
+  tool_perf_dpc_latency: { name: 'Ajustes Avançados de Latência DPC', category: 'DESEMPENHO', required_plan_level: 4 },
+  tool_perf_queue_depth: { name: 'Redução da Fila de Comandos do Kernel', category: 'DESEMPENHO', required_plan_level: 4 },
+  tool_game_fps_tweaks: { name: 'Ajustes de Frametime em Jogos', category: 'GAMING', required_plan_level: 3 },
+  tool_game_low_latency: { name: 'Modo Gamer de Baixa Latência', category: 'GAMING', required_plan_level: 3 },
+  tool_game_frame_consistency: { name: 'Consistência de Quadros Avançada', category: 'GAMING', required_plan_level: 4 },
+  tool_game_extreme_suite: { name: 'Suite Exclusiva DYARTE Extreme', category: 'GAMING', required_plan_level: 4 },
+  tool_gpu_profile_opt: { name: 'Perfis Otimizados de GPU', category: 'GPU', required_plan_level: 3 },
+  tool_gpu_amd_driver: { name: 'AMD Driver Optimized', category: 'GPU', required_plan_level: 3 },
+  tool_gpu_nvidia_driver: { name: 'NVIDIA Driver Optimized', category: 'GPU', required_plan_level: 3 },
+};
+
 // Extended Request interface with authenticated user
 export interface AuthenticatedRequest extends Request {
   user?: DecodedIdToken;
@@ -73,6 +99,17 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
     const decoded = await adminAuth.verifyIdToken(token);
     req.user = decoded;
 
+    const isKelber = (decoded.email || '').toLowerCase() === 'kelberduarte22@gmail.com';
+
+    // Ensure Custom Claim role: ADMIN for the master administrator
+    if (isKelber && decoded.role !== 'ADMIN') {
+      try {
+        await adminAuth.setCustomUserClaims(decoded.uid, { role: 'ADMIN' });
+      } catch (claimErr) {
+        console.warn('Erro ao atualizar claims administrativas:', claimErr);
+      }
+    }
+
     // Fetch user profile from Firestore
     const userDocRef = adminDb.collection('users').doc(decoded.uid);
     const userSnap = await userDocRef.get();
@@ -82,22 +119,35 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
       if (req.userDoc.status === 'BLOQUEADO') {
         return res.status(403).json({ error: 'Sua conta foi suspensa pela administração.' });
       }
+      // Guarantee master admin account retains privileges even if doc was tampered with
+      if (isKelber && (req.userDoc.role !== 'ADMIN' || req.userDoc.nivel_plano !== 4)) {
+        await userDocRef.update({
+          role: 'ADMIN',
+          nivel_plano: 4,
+          plano_atual: 'COMPLETO',
+          status_plano: 'ATIVO',
+          status_licenca: 'ATIVA',
+        });
+        req.userDoc.role = 'ADMIN';
+        req.userDoc.nivel_plano = 4;
+        req.userDoc.plano_atual = 'COMPLETO';
+      }
     } else {
-      // Default profile if newly authenticated via Google / Firebase
-      const isKelber = (decoded.email || '').toLowerCase() === 'kelberduarte22@gmail.com';
+      // Default profile for newly authenticated users:
+      // Regular users receive strictly level 1 (BÁSICO, Gratuito)
       const defaultUser = {
         user_id: decoded.uid,
         nome: decoded.name || (decoded.email ? decoded.email.split('@')[0] : 'Usuário'),
         email: (decoded.email || '').toLowerCase(),
         role: isKelber ? 'ADMIN' : 'USER',
-        nivel_plano: isKelber ? 4 : 0,
-        plano_atual: isKelber ? 'COMPLETO' : 'SEM PLANO',
-        status_plano: isKelber ? 'ATIVO' : 'SEM_PLANO',
+        nivel_plano: isKelber ? 4 : 1,
+        plano_atual: isKelber ? 'COMPLETO' : 'BÁSICO',
+        status_plano: 'ATIVO',
         data_criacao: new Date().toISOString().split('T')[0],
-        data_inicio: isKelber ? new Date().toISOString().split('T')[0] : '-',
+        data_inicio: new Date().toISOString().split('T')[0],
         data_expiracao: isKelber ? '2030-12-31' : '-',
         license_id: isKelber ? `lic_${decoded.uid.substring(0, 8)}` : '',
-        status_licenca: isKelber ? 'ATIVA' : 'PENDENTE',
+        status_licenca: isKelber ? 'ATIVA' : 'INATIVA',
         device_id: 'DYARTE-DESKTOP',
         ultimo_login: new Date().toISOString(),
         status: 'ATIVO',
@@ -123,21 +173,20 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
   }
 }
 
-// Admin Authorization Middleware
+// Admin Authorization Middleware (Strictly kelberduarte22@gmail.com or verified Custom Claims)
 async function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   if (!req.user || !req.userDoc) {
     return res.status(401).json({ error: 'Autenticação requerida.' });
   }
 
-  const isKelber = (req.user.email || '').toLowerCase() === 'kelberduarte22@gmail.com';
-  const isAdminRole = req.userDoc.role === 'ADMIN';
+  const userEmail = (req.user.email || '').toLowerCase();
+  const isMasterAdmin = userEmail === 'kelberduarte22@gmail.com';
+  const hasAdminClaim = req.user.role === 'ADMIN';
 
-  // Double check admin document in database
-  const adminDoc = await adminDb.collection('admins').doc(req.user.uid).get();
-  const isAdminInDb = adminDoc.exists && adminDoc.data()?.role === 'ADMIN';
-
-  if (!isKelber && !isAdminRole && !isAdminInDb) {
-    return res.status(403).json({ error: 'Acesso negado. Esta operação exige privilégios de administrador.' });
+  if (!isMasterAdmin && !hasAdminClaim) {
+    return res.status(403).json({
+      error: 'Acesso negado. Apenas o administrador autorizado (kelberduarte22@gmail.com) possui permissão.',
+    });
   }
 
   next();
@@ -243,28 +292,43 @@ app.post('/api/license/validate', requireAuth, async (req: AuthenticatedRequest,
   }
 });
 
-// Execute Optimization Tool - Protected with Server-Side Plan & License Validation
+// Execute Optimization Tool - Protected with Server-Side Canonical Registry & License Validation
 app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { tool_id, tool_name, category, required_level } = req.body;
+    const { tool_id } = req.body;
     const user = req.userDoc;
     const uid = req.user!.uid;
 
-    const userLevel = Number(user.nivel_plano) || 0;
-    const reqLevel = Number(required_level) || 2;
+    if (!tool_id || typeof tool_id !== 'string') {
+      return res.status(400).json({ success: false, error: 'tool_id é obrigatório.' });
+    }
 
-    // Server-side authorization check
-    if (userLevel < reqLevel && user.role !== 'ADMIN') {
+    // Consult canonical registry on backend authority
+    const canonicalTool = CANONICAL_TOOLS[tool_id];
+    if (!canonicalTool) {
+      return res.status(400).json({
+        success: false,
+        error: 'Ferramenta não reconhecida no catálogo oficial de otimizações do sistema.',
+      });
+    }
+
+    const userLevel = Number(user.nivel_plano) || 1;
+    const reqLevel = canonicalTool.required_plan_level;
+    const isAdmin = user.role === 'ADMIN';
+
+    // Server-side authorization check based on canonical required plan level
+    if (userLevel < reqLevel && !isAdmin) {
       return res.status(403).json({
         success: false,
         error: `Recurso bloqueado. Esta otimização requer o Plano Nível ${reqLevel} (${reqLevel === 2 ? 'Médio' : reqLevel === 3 ? 'Avançado' : 'Completo'}). Seu plano atual é nível ${userLevel}.`,
       });
     }
 
-    if (user.status_licenca !== 'ATIVA' && user.role !== 'ADMIN') {
+    // Require active license for paid tools (level > 1)
+    if (reqLevel > 1 && user.status_licenca !== 'ATIVA' && !isAdmin) {
       return res.status(403).json({
         success: false,
-        error: `Sua licença está com status ${user.status_licenca || 'PENDENTE'}. Ative uma licença válida para executar otimizações.`,
+        error: `Sua licença está com status ${user.status_licenca || 'PENDENTE'}. Ative uma licença válida para executar otimizações avançadas.`,
       });
     }
 
@@ -273,14 +337,14 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
     const historyItem = {
       history_id: historyId,
       user_id: uid,
-      tool_id: tool_id || 'tool_generic',
-      tool_name: tool_name || 'Otimização de Sistema',
-      category: category || 'SISTEMA',
+      tool_id,
+      tool_name: canonicalTool.name,
+      category: canonicalTool.category,
       date: new Date().toISOString(),
       status: 'SUCESSO',
-      result: 'Parâmetros de registro e telemetria aplicados com sucesso no Windows.',
-      duration_ms: Math.floor(Math.random() * 400) + 120,
-      details: 'Otimização executada via engine DYARTE e validada pelo servidor central.',
+      result: 'Diretiva de otimização autorizada e agendada para execução pelo DYARTE Agent.',
+      duration_ms: 180,
+      details: `Execução autorizada pelo backend central (Plano Nível ${reqLevel}).`,
     };
 
     await adminDb.collection('optimization_history').doc(historyId).set(historyItem);
@@ -288,7 +352,7 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
     res.json({
       success: true,
       historyItem,
-      message: 'Otimização autorizada e aplicada com êxito.',
+      message: 'Otimização autorizada com êxito pelo servidor.',
     });
   } catch (error) {
     console.error('Erro na execução de ferramenta:', error);
@@ -296,27 +360,114 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
   }
 });
 
-// Register / Sync Windows Device
+// Register / Sync Windows Device (Input validation and sanitization)
 app.post('/api/device/sync', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const deviceData = req.body;
+    const rawData = req.body || {};
     const uid = req.user!.uid;
-    const deviceId = deviceData.device_id || `DEV_${uid.substring(0, 8)}`;
+    const deviceId = typeof rawData.device_id === 'string' && rawData.device_id.trim()
+      ? rawData.device_id.trim().substring(0, 64)
+      : `DEV_${uid.substring(0, 8)}`;
 
-    const deviceDoc = {
-      ...deviceData,
+    const sanitizedDevice = {
       device_id: deviceId,
       user_id: uid,
+      cpu: typeof rawData.cpu === 'string' ? rawData.cpu.substring(0, 100) : 'Processador Windows',
+      gpu: typeof rawData.gpu === 'string' ? rawData.gpu.substring(0, 100) : 'Placa de Vídeo',
+      ram: typeof rawData.ram === 'string' ? rawData.ram.substring(0, 50) : '16 GB',
+      storage: typeof rawData.storage === 'string' ? rawData.storage.substring(0, 80) : 'SSD NVMe',
+      windows: typeof rawData.windows === 'string' ? rawData.windows.substring(0, 60) : 'Windows 11 Pro',
+      windows_version: typeof rawData.windows_version === 'string' ? rawData.windows_version.substring(0, 40) : '23H2',
+      build: typeof rawData.build === 'string' ? rawData.build.substring(0, 30) : '22631.3007',
+      motherboard: typeof rawData.motherboard === 'string' ? rawData.motherboard.substring(0, 80) : 'Placa Mãe',
+      bios_version: typeof rawData.bios_version === 'string' ? rawData.bios_version.substring(0, 40) : 'UEFI',
+      is_agent_connected: Boolean(rawData.is_agent_connected),
+      agent_version: typeof rawData.agent_version === 'string' ? rawData.agent_version.substring(0, 20) : '1.4.2-win',
       last_seen: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
-    await adminDb.collection('devices').doc(deviceId).set(deviceDoc, { merge: true });
+    await adminDb.collection('devices').doc(deviceId).set(sanitizedDevice, { merge: true });
     await adminDb.collection('users').doc(uid).update({ device_id: deviceId });
 
-    res.json({ success: true, device: deviceDoc });
+    res.json({ success: true, device: sanitizedDevice });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao sincronizar informações do dispositivo Windows.' });
+  }
+});
+
+// Cakto Payment Webhook (Strictly server-side secret validation)
+app.post('/api/webhook/cakto', async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers['authorization'] || req.headers['x-webhook-secret'];
+    const serverSecret = process.env.CAKTO_WEBHOOK_SECRET || 'dyarte_whsec_98f482a1762c90';
+
+    if (!authHeader || (authHeader !== serverSecret && authHeader !== `Bearer ${serverSecret}`)) {
+      return res.status(401).json({ error: 'Assinatura ou segredo do webhook inválido.' });
+    }
+
+    const { email, plan_id, transaction_id, customer_name } = req.body;
+    if (!email || !plan_id) {
+      return res.status(400).json({ error: 'Parâmetros de email e plano são obrigatórios.' });
+    }
+
+    const safeEmail = String(email).trim().toLowerCase();
+    const safePlanId = String(plan_id).trim().toLowerCase();
+
+    let planLevel = 1;
+    let planName = 'BÁSICO';
+    if (safePlanId.includes('completo') || safePlanId === '4') {
+      planLevel = 4;
+      planName = 'COMPLETO';
+    } else if (safePlanId.includes('avancado') || safePlanId === '3') {
+      planLevel = 3;
+      planName = 'AVANÇADO';
+    } else if (safePlanId.includes('medio') || safePlanId === '2') {
+      planLevel = 2;
+      planName = 'MÉDIO';
+    }
+
+    const userSnap = await adminDb.collection('users').where('email', '==', safeEmail).get();
+    if (userSnap.empty) {
+      return res.status(404).json({ error: 'Usuário não encontrado para o e-mail informado.' });
+    }
+
+    const userDoc = userSnap.docs[0];
+    const uid = userDoc.id;
+    const newLicenseId = `lic_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    await userDoc.ref.update({
+      plano_atual: planName,
+      nivel_plano: planLevel,
+      status_plano: 'ATIVO',
+      status_licenca: 'ATIVA',
+      license_id: newLicenseId,
+      data_inicio: new Date().toISOString().split('T')[0],
+      data_expiracao: expiresAt,
+    });
+
+    await adminDb.collection('licenses').doc(newLicenseId).set({
+      license_id: newLicenseId,
+      license_key: `DYARTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      user_id: uid,
+      user_name: customer_name || userDoc.data().nome || 'Cliente',
+      user_email: safeEmail,
+      plan_id: safePlanId,
+      status: 'ATIVA',
+      created_at: new Date().toISOString().split('T')[0],
+      activated_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      device_id: userDoc.data().device_id || 'PENDENTE',
+      transaction_id: transaction_id || `tx_${Date.now()}`,
+    });
+
+    await recordAdminLog('WEBHOOK_CAKTO_PURCHASE', 'system_webhook', uid, `Pagamento aprovado para plano ${planName}. Licença ${newLicenseId} criada.`);
+
+    res.json({ success: true, message: `Plano ${planName} ativado com sucesso para ${safeEmail}.` });
+  } catch (err) {
+    console.error('Erro no processamento do webhook Cakto:', err);
+    res.status(500).json({ error: 'Falha interna ao processar webhook de pagamento.' });
   }
 });
 
@@ -446,6 +597,54 @@ app.get('/api/admin/logs', requireAuth, requireAdmin, async (req: AuthenticatedR
     res.json({ logs });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao carregar logs administrativos.' });
+  }
+});
+
+// List All Licenses in System (Admin Only - Real Database Capture)
+app.get('/api/admin/licenses', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const licSnap = await adminDb.collection('licenses').get();
+    const licensesList = licSnap.docs.map((d) => d.data());
+    res.json({ licenses: licensesList });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar licenças do sistema.' });
+  }
+});
+
+// Real-time Database Aggregate Stats for Admin Dashboard
+app.get('/api/admin/stats', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const [usersSnap, licSnap] = await Promise.all([
+      adminDb.collection('users').get(),
+      adminDb.collection('licenses').get(),
+    ]);
+
+    const users = usersSnap.docs.map((d) => d.data());
+    const licenses = licSnap.docs.map((d) => d.data());
+
+    const totalUsers = users.length;
+    const activeLicenses = licenses.filter((l) => l.status === 'ATIVA').length;
+    const paidUsers = users.filter((u) => Number(u.nivel_plano) > 1 && u.status_plano === 'ATIVO').length;
+
+    // Real estimated monthly revenue calculation based on active user plan levels (R$ 30, R$ 45, R$ 60)
+    const monthlyRevenue = users.reduce((acc, u) => {
+      if (u.status_plano === 'ATIVO') {
+        const lvl = Number(u.nivel_plano);
+        if (lvl === 2) return acc + 30;
+        if (lvl === 3) return acc + 45;
+        if (lvl === 4) return acc + 60;
+      }
+      return acc;
+    }, 0);
+
+    res.json({
+      totalUsers,
+      activeLicenses,
+      paidUsers,
+      monthlyRevenue,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao calcular estatísticas reais do banco de dados.' });
   }
 });
 

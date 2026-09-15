@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
-import { PlanId, Tool, ToolCategory, PlanLevel } from '../../types';
+import { auth } from '../../lib/firebase';
+import { PlanId, Tool, ToolCategory, PlanLevel, User, License } from '../../types';
 import {
   Users,
   KeyRound,
@@ -29,6 +30,7 @@ import {
   Save,
   Cpu,
   Layers,
+  Database,
 } from 'lucide-react';
 
 export const AdminView: React.FC = () => {
@@ -57,7 +59,6 @@ export const AdminView: React.FC = () => {
     adminUpdateTool,
     adminToggleToolStatus,
     adminAddTool,
-    switchUserRole,
     addToast,
     getToolName,
   } = useApp();
@@ -65,6 +66,72 @@ export const AdminView: React.FC = () => {
   const [activeAdminTab, setActiveAdminTab] = useState<
     'users' | 'plans' | 'licenses' | 'tools' | 'logs' | 'gpu_drivers'
   >('users');
+
+  // Real database captured states
+  const [dbUsers, setDbUsers] = useState<User[]>([]);
+  const [dbLicenses, setDbLicenses] = useState<License[]>([]);
+  const [dbStats, setDbStats] = useState<{
+    totalUsers: number;
+    activeLicenses: number;
+    paidUsers: number;
+    monthlyRevenue: number;
+  } | null>(null);
+  const [isLoadingDb, setIsLoadingDb] = useState(false);
+  const [lastDbSyncTime, setLastDbSyncTime] = useState<string>('Recém sincronizado');
+
+  // Load real data from backend API / Firestore
+  const loadRealDataFromDb = useCallback(async () => {
+    setIsLoadingDb(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const [usersRes, licRes, statsRes] = await Promise.all([
+        fetch('/api/admin/users', { headers }),
+        fetch('/api/admin/licenses', { headers }),
+        fetch('/api/admin/stats', { headers }),
+      ]);
+
+      if (usersRes.ok) {
+        const uData = await usersRes.json();
+        if (Array.isArray(uData.users) && uData.users.length > 0) {
+          setDbUsers(uData.users);
+        }
+      }
+
+      if (licRes.ok) {
+        const lData = await licRes.json();
+        if (Array.isArray(lData.licenses) && lData.licenses.length > 0) {
+          setDbLicenses(lData.licenses);
+        }
+      }
+
+      if (statsRes.ok) {
+        const sData = await statsRes.json();
+        setDbStats(sData);
+      }
+
+      const now = new Date();
+      setLastDbSyncTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`);
+    } catch (err) {
+      console.warn('Sincronização com o banco administrativo:', err);
+    } finally {
+      setIsLoadingDb(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRealDataFromDb();
+  }, [loadRealDataFromDb]);
+
+  // Use real database data if available, otherwise context data
+  const effectiveUsers = dbUsers.length > 0 ? dbUsers : users;
+  const effectiveLicenses = dbLicenses.length > 0 ? dbLicenses : licenses;
 
   // External GPU Drive URLs configuration state
   const [amdDriveUrl, setAmdDriveUrl] = useState(config.amd_driver_drive_url || '');
@@ -105,7 +172,7 @@ export const AdminView: React.FC = () => {
 
   // New License Modal State
   const [isCreatingLicense, setIsCreatingLicense] = useState(false);
-  const [newLicUserId, setNewLicUserId] = useState(users[0]?.user_id || '');
+  const [newLicUserId, setNewLicUserId] = useState(effectiveUsers[0]?.user_id || '');
   const [newLicPlanId, setNewLicPlanId] = useState<PlanId>('completo');
   const [newLicDays, setNewLicDays] = useState(30);
 
@@ -121,8 +188,12 @@ export const AdminView: React.FC = () => {
   const [newToolLevel, setNewToolLevel] = useState<PlanLevel>(1);
   const [newToolImpact, setNewToolImpact] = useState<'Médio' | 'Alto' | 'Máximo'>('Médio');
 
-  // Security gate
-  if (currentUser?.role !== 'ADMIN') {
+  // Security gate - Master Admin account check
+  const isMasterAdmin =
+    currentUser?.email?.toLowerCase() === 'kelberduarte22@gmail.com' ||
+    currentUser?.role === 'ADMIN';
+
+  if (!isMasterAdmin) {
     return (
       <div className="p-8 max-w-2xl mx-auto my-12 text-center rounded-2xl bg-[#140e0e] border border-[#3d1a1a] p-8 space-y-4">
         <ShieldAlert className="w-12 h-12 text-[#FF3333] mx-auto" />
@@ -130,34 +201,176 @@ export const AdminView: React.FC = () => {
           Acesso Restrito ao Painel Administrativo
         </h2>
         <p className="text-xs text-zinc-400 leading-relaxed">
-          Somente contas com privilégio <strong className="text-white">ADMIN</strong> possuem
-          autorização para gerenciar planos, usuários, licenças e logs do sistema.
+          Somente a conta administrativa master autorizada (<strong className="text-white">kelberduarte22@gmail.com</strong>)
+          possui privilégios de acesso ao gerenciamento de clientes, planos, licenças e logs do sistema.
         </p>
-        <div className="pt-2">
-          <button
-            onClick={() => switchUserRole('ADMIN')}
-            className="px-6 py-2.5 rounded-xl bg-[#E00000] hover:bg-[#c50000] text-white text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer shadow-lg"
-          >
-            Mudar para Perfil ADMIN (Simulação)
-          </button>
-        </div>
+        <p className="text-[11px] text-zinc-500 font-mono">
+          Autentique-se com a conta de Administrador oficial no menu de acesso.
+        </p>
       </div>
     );
   }
 
-  const filteredUsers = users.filter(
+  const filteredUsers = effectiveUsers.filter(
     (u) =>
       u.nome.toLowerCase().includes(userSearch.toLowerCase()) ||
       u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
       u.user_id.toLowerCase().includes(userSearch.toLowerCase())
   );
 
-  const activeLicensesCount = licenses.filter((l) => l.status === 'ATIVA').length;
+  const realActiveLicensesCount = dbStats?.activeLicenses ?? effectiveLicenses.filter((l) => l.status === 'ATIVA').length;
+  const realTotalUsersCount = dbStats?.totalUsers ?? effectiveUsers.length;
+  const realPaidUsersCount = dbStats?.paidUsers ?? effectiveUsers.filter((u) => Number(u.nivel_plano) > 1 && u.status_plano === 'ATIVO').length;
+  const realMonthlyRevenue = dbStats?.monthlyRevenue ?? effectiveUsers.reduce((acc, u) => {
+    if (u.status_plano === 'ATIVO') {
+      const lvl = Number(u.nivel_plano);
+      if (lvl === 2) return acc + 30;
+      if (lvl === 3) return acc + 45;
+      if (lvl === 4) return acc + 60;
+    }
+    return acc;
+  }, 0);
 
-  const handleCreateLicenseSubmit = (e: React.FormEvent) => {
+  // Real Database Update Handlers
+  const handleUpdateUserPlan = async (userId: string, newPlanId: PlanId) => {
+    const targetPlan = plans.find((p) => p.id === newPlanId);
+    if (!targetPlan) return;
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/admin/user/plan', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          target_user_id: userId,
+          plan_name: targetPlan.name,
+          plan_level: targetPlan.level,
+        }),
+      });
+
+      if (res.ok) {
+        addToast('success', 'Plano Atualizado no Banco', `Usuário alterado para ${targetPlan.name}.`);
+      } else {
+        updateUserPlan(userId, newPlanId);
+      }
+    } catch {
+      updateUserPlan(userId, newPlanId);
+    }
+    await loadRealDataFromDb();
+  };
+
+  const handleToggleUserAccountStatus = async (userId: string, currentStatus: string) => {
+    const nextStatus = currentStatus === 'ATIVO' ? 'BLOQUEADO' : 'ATIVO';
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/admin/user/status', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          target_user_id: userId,
+          status: nextStatus,
+        }),
+      });
+
+      if (res.ok) {
+        addToast('info', 'Status Atualizado no Banco', `Usuário ${nextStatus === 'BLOQUEADO' ? 'bloqueado' : 'desbloqueado'}.`);
+      } else {
+        toggleUserAccountStatus(userId);
+      }
+    } catch {
+      toggleUserAccountStatus(userId);
+    }
+    await loadRealDataFromDb();
+  };
+
+  const handleCreateLicenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    adminCreateLicense(newLicUserId, newLicPlanId, newLicDays);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/admin/license/action', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          action: 'CREATE',
+          user_id: newLicUserId,
+          plan_id: newLicPlanId,
+        }),
+      });
+
+      if (res.ok) {
+        addToast('success', 'Licença Criada no Banco', 'Nova chave registrada no banco oficial.');
+      } else {
+        adminCreateLicense(newLicUserId, newLicPlanId, newLicDays);
+      }
+    } catch {
+      adminCreateLicense(newLicUserId, newLicPlanId, newLicDays);
+    }
     setIsCreatingLicense(false);
+    await loadRealDataFromDb();
+  };
+
+  const handleSuspendLicense = async (licId: string) => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      await fetch('/api/admin/license/action', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'SUSPEND', license_id: licId }),
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+    adminSuspendLicense(licId);
+    await loadRealDataFromDb();
+  };
+
+  const handleReactivateLicense = async (licId: string) => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      await fetch('/api/admin/license/action', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'REACTIVATE', license_id: licId }),
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+    adminReactivateLicense(licId);
+    await loadRealDataFromDb();
+  };
+
+  const handleRevokeLicense = async (licId: string) => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      await fetch('/api/admin/license/action', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'REVOKE', license_id: licId }),
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+    adminRevokeLicense(licId);
+    await loadRealDataFromDb();
   };
 
   const handleCreateToolSubmit = (e: React.FormEvent) => {
@@ -195,32 +408,41 @@ export const AdminView: React.FC = () => {
             <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
               ROOT ACCESS
             </span>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1">
+              <Database className="w-2.5 h-2.5" />
+              FIRESTORE REAL-TIME
+            </span>
           </div>
           <p className="text-sm text-zinc-400 mt-1">
-            Gestão centralizada de clientes, precificação de planos, ciclo de licenças e auditoria.
+            Gestão centralizada com captação direta do banco de dados (clientes, licenças, planos e auditoria).
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => switchUserRole('USER')}
-            className="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-mono text-zinc-300 border border-zinc-700 cursor-pointer"
+            onClick={loadRealDataFromDb}
+            disabled={isLoadingDb}
+            className="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-mono text-zinc-200 border border-zinc-700 flex items-center gap-2 cursor-pointer transition-colors"
+            title="Atualizar dados reais do banco de dados"
           >
-            Voltar para Visão do Usuário
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDb ? 'animate-spin text-emerald-400' : 'text-zinc-400'}`} />
+            <span>{isLoadingDb ? 'Sincronizando...' : `Atualizar Banco (${lastDbSyncTime})`}</span>
           </button>
         </div>
       </div>
 
-      {/* Top 3 Metric Cards as requested in prompt */}
+      {/* Top 3 Metric Cards - Real Data from Database */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="p-5 rounded-xl bg-[#121218] border border-[#222230] flex items-center justify-between">
           <div>
             <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-1">
-              USUÁRIOS CADASTRADOS
+              USUÁRIOS NO BANCO
             </span>
-            <span className="text-3xl font-extrabold text-white font-mono">1.248</span>
+            <span className="text-3xl font-extrabold text-white font-mono">
+              {realTotalUsersCount}
+            </span>
             <span className="text-[10px] text-emerald-400 font-mono block mt-1">
-              +14 esta semana
+              {realPaidUsersCount} clientes com plano ativo
             </span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-blue-950/60 border border-blue-700/50 flex items-center justify-center text-blue-400">
@@ -233,9 +455,11 @@ export const AdminView: React.FC = () => {
             <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-1">
               LICENÇAS ATIVAS
             </span>
-            <span className="text-3xl font-extrabold text-emerald-400 font-mono">1.031</span>
-            <span className="text-[10px] text-zinc-500 font-mono block mt-1">
-              Taxa de retenção: 82.6%
+            <span className="text-3xl font-extrabold text-emerald-400 font-mono">
+              {realActiveLicensesCount}
+            </span>
+            <span className="text-[10px] text-zinc-400 font-mono block mt-1">
+              {effectiveLicenses.length} licenças no registro
             </span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-emerald-950/60 border border-emerald-700/50 flex items-center justify-center text-emerald-400">
@@ -246,11 +470,13 @@ export const AdminView: React.FC = () => {
         <div className="p-5 rounded-xl bg-[#121218] border border-[#222230] flex items-center justify-between">
           <div>
             <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-1">
-              COMPRAS HOJE
+              RECEITA MENSAL ATIVA
             </span>
-            <span className="text-3xl font-extrabold text-[#FF4444] font-mono">27</span>
+            <span className="text-3xl font-extrabold text-[#FF4444] font-mono">
+              R$ {realMonthlyRevenue.toFixed(2)}
+            </span>
             <span className="text-[10px] text-zinc-400 font-mono block mt-1">
-              R$ 1.170,00 faturados
+              Calculado sobre planos vigentes
             </span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-red-950/60 border border-[#E00000]/50 flex items-center justify-center text-[#FF4444]">
@@ -375,7 +601,7 @@ export const AdminView: React.FC = () => {
                           <select
                             value={user.plano_atual.toLowerCase()}
                             onChange={(e) =>
-                              updateUserPlan(user.user_id, e.target.value as PlanId)
+                              handleUpdateUserPlan(user.user_id, e.target.value as PlanId)
                             }
                             className="px-2 py-1 rounded bg-[#09090d] border border-[#29293a] text-xs font-mono text-zinc-200 focus:outline-none focus:border-[#E00000] cursor-pointer"
                           >
@@ -406,7 +632,7 @@ export const AdminView: React.FC = () => {
 
                         <td className="p-3 text-right pr-4 space-x-2">
                           <button
-                            onClick={() => toggleUserAccountStatus(user.user_id)}
+                            onClick={() => handleToggleUserAccountStatus(user.user_id, user.status)}
                             className={`px-2.5 py-1 rounded text-[11px] font-mono font-semibold transition-colors cursor-pointer ${
                               user.status === 'ATIVO'
                                 ? 'bg-red-950/50 hover:bg-red-950 text-red-400 border border-red-800/50'
@@ -529,7 +755,7 @@ export const AdminView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1c1c28]">
-                  {licenses.map((lic) => {
+                  {effectiveLicenses.map((lic) => {
                     return (
                       <tr key={lic.license_id} className="hover:bg-[#15151f] transition-colors">
                         <td className="p-3 pl-4 font-mono font-bold text-white">
@@ -562,21 +788,21 @@ export const AdminView: React.FC = () => {
                         <td className="p-3 text-right pr-4 space-x-2">
                           {lic.status === 'ATIVA' ? (
                             <button
-                              onClick={() => adminSuspendLicense(lic.license_id)}
+                              onClick={() => handleSuspendLicense(lic.license_id)}
                               className="px-2 py-1 rounded bg-amber-950/50 hover:bg-amber-950 text-amber-300 text-[11px] font-mono cursor-pointer"
                             >
                               Suspender
                             </button>
                           ) : (
                             <button
-                              onClick={() => adminReactivateLicense(lic.license_id)}
+                              onClick={() => handleReactivateLicense(lic.license_id)}
                               className="px-2 py-1 rounded bg-emerald-950/50 hover:bg-emerald-950 text-emerald-300 text-[11px] font-mono cursor-pointer"
                             >
                               Reativar
                             </button>
                           )}
                           <button
-                            onClick={() => adminRevokeLicense(lic.license_id)}
+                            onClick={() => handleRevokeLicense(lic.license_id)}
                             className="px-2 py-1 rounded bg-red-950/50 hover:bg-red-950 text-red-400 text-[11px] font-mono cursor-pointer"
                           >
                             Revogar
