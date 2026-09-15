@@ -819,21 +819,6 @@ export const OptimizationView: React.FC = () => {
                   </button>
 
                   <div className="flex items-center gap-2.5">
-                    {/* BOTAO EXECUTAR DIRETO */}
-                    <button
-                      onClick={() => executeOptimizationTool(tool.tool_id)}
-                      disabled={isOptimizing}
-                      className="px-2.5 py-1 rounded bg-[#E00000]/15 hover:bg-[#E00000] text-white text-[11px] font-mono font-bold flex items-center gap-1 transition-all border border-[#E00000]/40 cursor-pointer disabled:opacity-50"
-                      title="Executar otimização no Windows"
-                    >
-                      {isExecuting ? (
-                        <div className="w-2.5 h-2.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <Play className="w-2.5 h-2.5 fill-current" />
-                      )}
-                      <span>EXECUTAR</span>
-                    </button>
-
                     {/* TOGGLE SWITCH */}
                     <button
                       type="button"

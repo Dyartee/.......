@@ -1,25 +1,19 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
-  ShieldCheck,
   Zap,
   Lock,
   Mail,
-  User,
   ArrowRight,
   Globe,
   RefreshCw,
-  CheckCircle2,
-  Crown,
-  Eye,
-  Sparkles,
+  ExternalLink,
 } from 'lucide-react';
 
 export const AuthView: React.FC = () => {
   const {
     login,
     loginWithGoogle,
-    register,
     requestPasswordReset,
     openLegalModal,
     addToast,
@@ -27,18 +21,11 @@ export const AuthView: React.FC = () => {
     isSyncingWithWeb,
   } = useApp();
 
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [mode, setMode] = useState<'login' | 'forgot'>('login');
 
   // Login Form
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-
-  // Register Form
-  const [regName, setRegName] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regPassword, setRegPassword] = useState('');
-  const [regConfirmPassword, setRegConfirmPassword] = useState('');
-  const [regTerms, setRegTerms] = useState(true);
 
   // Forgot Password Form
   const [forgotEmail, setForgotEmail] = useState('');
@@ -54,8 +41,11 @@ export const AuthView: React.FC = () => {
 
     setIsLoading(true);
     await new Promise((r) => setTimeout(r, 600));
-    const result = login(loginEmail, loginPassword);
+    const result = await login(loginEmail, loginPassword);
     setIsLoading(false);
+    if (!result.success && result.error) {
+      addToast('error', 'Falha no Acesso', result.error);
+    }
   };
 
   const handleWebSessionSync = async () => {
@@ -65,36 +55,19 @@ export const AuthView: React.FC = () => {
     }
   };
 
-  const handleRegisterSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!regName || !regEmail || !regPassword) {
-      addToast('error', 'Campos Obrigatórios', 'Preencha todos os campos do cadastro.');
-      return;
+  const handleCreateAccountClick = () => {
+    // Redireciona o usuário para o menu de criação de conta no site oficial
+    const websiteRegisterUrl = 'https://dyarte.com/criar-conta';
+    try {
+      window.open(websiteRegisterUrl, '_blank', 'noopener,noreferrer');
+    } catch {
+      // Ignora restrições do navegador
     }
-    if (regPassword !== regConfirmPassword) {
-      addToast('error', 'Erro de Senha', 'As senhas não coincidem.');
-      return;
-    }
-    if (!regTerms) {
-      addToast('error', 'Termos Obrigatórios', 'Você deve aceitar os termos de uso.');
-      return;
-    }
-
-    setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 700));
-    const result = register({
-      nome: regName,
-      email: regEmail,
-      senha: regPassword,
-      confirmacao: regConfirmPassword,
-      termos: regTerms,
-      privacidade: true,
-    });
-    setIsLoading(false);
-
-    if (!result.success && result.error) {
-      addToast('error', 'Falha no Cadastro', result.error);
-    }
+    addToast(
+      'info',
+      'Criação de Conta no Site',
+      'Redirecionando para o menu de criação de conta no site oficial. Link e informações serão integrados com o sistema.'
+    );
   };
 
   const handleForgotSubmit = async (e: React.FormEvent) => {
@@ -112,24 +85,6 @@ export const AuthView: React.FC = () => {
       setMode('login');
     } else {
       addToast('error', 'Falha na Recuperação', result.message);
-    }
-  };
-
-  // Quick Demo Logins
-  const handleQuickLogin = (role: 'user' | 'admin' | 'view_only') => {
-    if (role === 'admin') {
-      login('admin@dyarte.com', 'admin123');
-    } else if (role === 'view_only') {
-      // Register or login a fresh view-only user
-      register({
-        nome: 'Visitante Teste',
-        email: `visitante_${Math.floor(100 + Math.random() * 900)}@email.com`,
-        senha: '123',
-        termos: true,
-        privacidade: true,
-      });
-    } else {
-      login('kelberduarte22@gmail.com', '123456');
     }
   };
 
@@ -193,7 +148,7 @@ export const AuthView: React.FC = () => {
             <div className="h-px flex-1 bg-zinc-800" />
           </div>
 
-          {/* Tabs for Login / Register */}
+          {/* Tabs: ENTRAR NA CONTA e CRIAR CONTA */}
           {mode !== 'forgot' && (
             <div className="flex rounded-xl bg-[#09090d] p-1 border border-[#1e1e2b]">
               <button
@@ -205,18 +160,16 @@ export const AuthView: React.FC = () => {
                     : 'text-zinc-400 hover:text-white'
                 }`}
               >
-                Entrar com Conta do Site
+                ENTRAR NA CONTA
               </button>
               <button
                 type="button"
-                onClick={() => setMode('register')}
-                className={`flex-1 py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
-                  mode === 'register'
-                    ? 'bg-[#E00000] text-white shadow-md'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
+                onClick={handleCreateAccountClick}
+                className="flex-1 py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer text-zinc-400 hover:text-white hover:bg-zinc-800/50 flex items-center justify-center gap-1.5"
+                title="Criar conta no site oficial do DYARTE OPTIMIZER"
               >
-                Criar Conta Web
+                <span>CRIAR CONTA</span>
+                <ExternalLink className="w-3 h-3 text-zinc-500" />
               </button>
             </div>
           )}
@@ -274,7 +227,7 @@ export const AuthView: React.FC = () => {
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 ) : (
                   <>
-                    <span>Entrar e Sincronizar Plano</span>
+                    <span>ENTRAR NA CONTA</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
@@ -306,120 +259,6 @@ export const AuthView: React.FC = () => {
                   <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.4-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"/>
                 </svg>
                 <span>Continuar com Google (Gmail)</span>
-              </button>
-            </form>
-          )}
-
-          {/* REGISTER FORM */}
-          {mode === 'register' && (
-            <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
-              <div className="p-3 rounded-xl bg-[#0a0a0f] border border-zinc-800 text-[11px] text-zinc-300 space-y-1">
-                <span className="text-emerald-400 font-bold font-mono uppercase block">
-                  Cadastro Automático na Nuvem
-                </span>
-                <p className="text-zinc-400 text-[10px]">
-                  Ao cadastrar, você inicia no modo de visualização para explorar as ferramentas do sistema. Ao assinar no site, seu plano é liberado instantaneamente.
-                </p>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-mono text-zinc-400 uppercase block mb-1">
-                  Nome Completo:
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    required
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    placeholder="Ex: Carlos Silva"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#09090d] border border-[#262635] text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-[#E00000]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-mono text-zinc-400 uppercase block mb-1">
-                  E-mail:
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="email"
-                    required
-                    value={regEmail}
-                    onChange={(e) => setRegEmail(e.target.value)}
-                    placeholder="seuemail@exemplo.com"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[#09090d] border border-[#262635] text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-[#E00000]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[11px] font-mono text-zinc-400 uppercase block mb-1">
-                    Senha:
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2.5 rounded-xl bg-[#09090d] border border-[#262635] text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-[#E00000]"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-mono text-zinc-400 uppercase block mb-1">
-                    Confirmar:
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    value={regConfirmPassword}
-                    onChange={(e) => setRegConfirmPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2.5 rounded-xl bg-[#09090d] border border-[#262635] text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-[#E00000]"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="termsCheck"
-                  checked={regTerms}
-                  onChange={(e) => setRegTerms(e.target.checked)}
-                  className="rounded border-zinc-700 bg-black text-[#E00000] focus:ring-0 cursor-pointer"
-                />
-                <label htmlFor="termsCheck" className="text-[11px] text-zinc-400">
-                  Li e concordo com os{' '}
-                  <button
-                    type="button"
-                    onClick={() => openLegalModal('terms')}
-                    className="text-white underline hover:text-[#FF4444]"
-                  >
-                    Termos de Uso
-                  </button>{' '}
-                  do software.
-                </label>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-3 rounded-xl bg-[#E00000] hover:bg-[#c50000] text-white text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(224,0,0,0.4)] disabled:opacity-50"
-              >
-                {isLoading ? (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <span>Criar Conta e Explorar</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
               </button>
             </form>
           )}
@@ -469,39 +308,6 @@ export const AuthView: React.FC = () => {
               </button>
             </form>
           )}
-
-          {/* Quick Demo Access Buttons */}
-          <div className="pt-4 border-t border-zinc-800 space-y-2">
-            <span className="text-[10px] font-mono uppercase text-zinc-500 font-bold block text-center">
-              Acesso Rápido para Demonstração:
-            </span>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('user')}
-                className="p-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-[10px] font-mono text-zinc-300 transition-colors flex flex-col items-center justify-center gap-1 cursor-pointer border border-zinc-700"
-              >
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Cliente Ativo</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('view_only')}
-                className="p-2 rounded-lg bg-amber-950/30 hover:bg-amber-900/50 text-[10px] font-mono text-amber-300 transition-colors flex flex-col items-center justify-center gap-1 cursor-pointer border border-amber-800/40"
-              >
-                <Eye className="w-3.5 h-3.5 text-amber-400" />
-                <span>Sem Plano</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('admin')}
-                className="p-2 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-[10px] font-mono text-rose-300 transition-colors flex flex-col items-center justify-center gap-1 cursor-pointer border border-rose-800/50"
-              >
-                <Crown className="w-3.5 h-3.5 text-rose-400" />
-                <span>Painel Admin</span>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Legal Links Footer */}

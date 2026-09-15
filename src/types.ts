@@ -8,6 +8,22 @@ export type LicenseStatus = 'ATIVA' | 'PENDENTE' | 'EXPIRADA' | 'SUSPENSA' | 'CA
 
 export type ToolCategory = 'SISTEMA' | 'DESEMPENHO' | 'GAMING' | 'GPU';
 
+export type AgentConnectionState =
+  | 'AGENT_OFFLINE'
+  | 'AGENT_CONNECTING'
+  | 'AGENT_ONLINE'
+  | 'AGENT_ERROR';
+
+export type OptimizationToolState =
+  | 'DISPONIVEL'
+  | 'INCOMPATIVEL'
+  | 'JA_APLICADO'
+  | 'APLICANDO'
+  | 'APLICADO'
+  | 'FALHA'
+  | 'REVERTENDO'
+  | 'REVERTIDO';
+
 export interface Plan {
   id: PlanId;
   name: string;
@@ -71,14 +87,20 @@ export interface Tool {
 export interface OptimizationHistoryItem {
   history_id: string;
   user_id: string;
+  device_id?: string;
   tool_id: string;
   tool_name: string;
   category: ToolCategory;
   date: string;
-  status: 'SUCESSO' | 'PENDENTE' | 'FALHA';
+  status: 'SUCESSO' | 'PENDENTE' | 'FALHA' | 'REVERTIDO';
   result: string;
   duration_ms: number;
   details?: string;
+  before_state?: Record<string, any>;
+  after_state?: Record<string, any>;
+  agent_version?: string;
+  error?: string;
+  rollback_available?: boolean;
 }
 
 export interface DeviceInfo {
@@ -89,22 +111,23 @@ export interface DeviceInfo {
   motherboard: string;
   motherboard_chipset?: string;
   bios_version?: string;
-  resizable_bar?: boolean;
-  secure_boot?: boolean;
-  xmp_profile?: string;
-  input_lag_ms?: number;
+  resizable_bar?: boolean | null;
+  secure_boot?: boolean | null;
+  xmp_profile?: string | null;
+  input_lag_ms?: number | null;
   windows: string;
   windows_version: string;
   build: string;
   device_id: string;
   is_agent_connected: boolean;
+  agent_status?: AgentConnectionState;
   agent_version: string;
   last_heartbeat: string;
-  cpu_usage_pct: number;
-  gpu_usage_pct: number;
-  ram_usage_pct: number;
-  temp_c: number;
-  ping_ms: number;
+  cpu_usage_pct: number | null;
+  gpu_usage_pct: number | null;
+  ram_usage_pct: number | null;
+  temp_c: number | null;
+  ping_ms: number | null;
 }
 
 export interface AppConfig {
