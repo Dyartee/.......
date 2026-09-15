@@ -1,0 +1,135 @@
+export type UserRole = 'USER' | 'ADMIN';
+
+export type PlanLevel = 0 | 1 | 2 | 3 | 4;
+
+export type PlanId = 'basico' | 'medio' | 'avancado' | 'completo';
+
+export type LicenseStatus = 'ATIVA' | 'PENDENTE' | 'EXPIRADA' | 'SUSPENSA' | 'CANCELADA';
+
+export type ToolCategory = 'SISTEMA' | 'DESEMPENHO' | 'GAMING' | 'GPU';
+
+export interface Plan {
+  id: PlanId;
+  name: string;
+  level: 1 | 2 | 3 | 4;
+  price: number;
+  period: string;
+  description: string;
+  features: string[];
+  badge?: string;
+  badgeType?: 'popular' | 'max';
+  active: boolean;
+  checkoutUrlKey: 'basic_checkout_url' | 'medium_checkout_url' | 'advanced_checkout_url' | 'complete_checkout_url';
+}
+
+export interface User {
+  user_id: string;
+  nome: string;
+  email: string;
+  data_criacao: string;
+  plano_atual: string;
+  nivel_plano: PlanLevel;
+  status_plano: 'ATIVO' | 'EXPIRADO' | 'PENDENTE' | 'SEM_PLANO';
+  data_inicio: string;
+  data_expiracao: string;
+  license_id: string;
+  status_licenca: LicenseStatus;
+  device_id: string;
+  ultimo_login: string;
+  role: UserRole;
+  status: 'ATIVO' | 'BLOQUEADO';
+  avatar_seed?: string;
+}
+
+export interface License {
+  license_id: string;
+  license_key: string;
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  plan_id: PlanId;
+  status: LicenseStatus;
+  created_at: string;
+  activated_at: string;
+  expires_at: string;
+  device_id: string;
+}
+
+export interface Tool {
+  tool_id: string;
+  nome: string;
+  descricao: string;
+  categoria: ToolCategory;
+  required_plan_level: PlanLevel;
+  status: 'ATIVO' | 'DESATIVADO';
+  icon: string;
+  impact: 'Médio' | 'Alto' | 'Máximo';
+  details: string;
+  powershellSnippet?: string;
+}
+
+export interface OptimizationHistoryItem {
+  history_id: string;
+  user_id: string;
+  tool_id: string;
+  tool_name: string;
+  category: ToolCategory;
+  date: string;
+  status: 'SUCESSO' | 'PENDENTE' | 'FALHA';
+  result: string;
+  duration_ms: number;
+  details?: string;
+}
+
+export interface DeviceInfo {
+  cpu: string;
+  gpu: string;
+  ram: string;
+  storage: string;
+  motherboard: string;
+  motherboard_chipset?: string;
+  bios_version?: string;
+  resizable_bar?: boolean;
+  secure_boot?: boolean;
+  xmp_profile?: string;
+  input_lag_ms?: number;
+  windows: string;
+  windows_version: string;
+  build: string;
+  device_id: string;
+  is_agent_connected: boolean;
+  agent_version: string;
+  last_heartbeat: string;
+  cpu_usage_pct: number;
+  gpu_usage_pct: number;
+  ram_usage_pct: number;
+  temp_c: number;
+  ping_ms: number;
+}
+
+export interface AppConfig {
+  basic_checkout_url: string;
+  medium_checkout_url: string;
+  advanced_checkout_url: string;
+  complete_checkout_url: string;
+  support_email: string;
+  discord_url: string;
+  webhook_secret: string;
+  agent_download_url: string;
+  app_version: string;
+  require_agent_connection: boolean;
+  amd_driver_drive_url?: string;
+  nvidia_driver_drive_url?: string;
+  safety_lock_enabled?: boolean;
+}
+
+export interface AdminLog {
+  log_id: string;
+  admin_id: string;
+  admin_name: string;
+  action: string;
+  target_user?: string;
+  details: string;
+  timestamp: string;
+  ip_address: string;
+}

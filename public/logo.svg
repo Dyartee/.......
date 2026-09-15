@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 300" width="100%" height="100%">
+  <defs>
+    <linearGradient id="silverGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="35%" stop-color="#E2E8F0" />
+      <stop offset="70%" stop-color="#94A3B8" />
+      <stop offset="100%" stop-color="#CBD5E1" />
+    </linearGradient>
+    <linearGradient id="redAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF3333" />
+      <stop offset="100%" stop-color="#B30000" />
+    </linearGradient>
+  </defs>
+
+  <!-- Monogram D Emblem -->
+  <g transform="translate(190, 25) scale(1.2)">
+    <path d="M 18 16 L 60 16 C 82 16, 92 32, 92 50 C 92 68, 80 84, 58 84 L 42 84 L 56 60 L 60 60 C 70 60, 76 56, 76 50 C 76 44, 70 38, 58 38 L 33 38 L 18 16 Z" fill="url(#silverGrad)" />
+    <path d="M 28 32 L 52 50 L 26 84 L 16 84 L 38 50 L 18 32 Z" fill="url(#silverGrad)" />
+  </g>
+
+  <!-- DYARTE Text -->
+  <g fill="url(#silverGrad)" transform="translate(90, 185)">
+    <!-- D -->
+    <path d="M 10 0 L 35 0 C 48 0, 56 8, 56 22 C 56 36, 48 44, 35 44 L 10 44 Z M 20 10 L 20 34 L 33 34 C 41 34, 46 29, 46 22 C 46 15, 41 10, 33 10 Z" />
+    <!-- Y -->
+    <path d="M 75 0 L 88 22 L 88 44 L 98 44 L 98 22 L 111 0 L 99 0 L 93 12 L 87 0 Z" />
+    <!-- A -->
+    <path d="M 140 0 L 122 44 L 133 44 L 138 31 L 157 31 L 162 44 L 173 44 L 155 0 Z M 147 9 L 154 22 L 141 22 Z" />
+    <!-- R -->
+    <path d="M 188 0 L 214 0 C 224 0, 232 6, 232 17 C 232 25, 226 31, 217 33 L 234 44 L 222 44 L 207 34 L 198 34 L 198 44 L 188 44 Z M 198 9 L 198 25 L 212 25 C 218 25, 222 22, 222 17 C 222 12, 218 9, 212 9 Z" />
+    <!-- T -->
+    <path d="M 245 0 L 283 0 L 283 9 L 269 9 L 269 44 L 259 44 L 259 9 L 245 9 Z" />
+    <!-- E -->
+    <path d="M 298 0 L 332 0 L 332 9 L 298 9 Z M 298 17 L 328 17 L 328 26 L 298 26 Z M 298 35 L 332 35 L 332 44 L 298 44 Z" fill="url(#silverGrad)" />
+  </g>
+</svg>

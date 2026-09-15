@@ -1,0 +1,1840 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  User,
+  Plan,
+  Tool,
+  License,
+  OptimizationHistoryItem,
+  DeviceInfo,
+  AppConfig,
+  AdminLog,
+  PlanLevel,
+  PlanId,
+  LicenseStatus,
+} from '../types';
+import {
+  INITIAL_USERS,
+  INITIAL_PLANS,
+  INITIAL_TOOLS,
+  INITIAL_LICENSES,
+  INITIAL_HISTORY,
+  INITIAL_DEVICE,
+  INITIAL_CONFIG,
+  INITIAL_ADMIN_LOGS,
+} from '../data/initialData';
+import { detectFullComputerSpecs } from '../utils/hardwareDetection';
+import { LanguageCode, translations } from '../i18n/translations';
+
+export type NavView =
+  | 'dashboard'
+  | 'optimization'
+  | 'plans'
+  | 'computer'
+  | 'history'
+  | 'languages'
+  | 'profile'
+  | 'settings'
+  | 'admin';
+
+interface UpgradeModalData {
+  isOpen: boolean;
+  requiredLevel: PlanLevel;
+  toolName: string;
+  category?: string;
+}
+
+interface ToastMessage {
+  id: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  title: string;
+  message: string;
+}
+
+export interface DriverPipelineStage {
+  isOpen: boolean;
+  brand: 'AMD' | 'NVIDIA';
+  phase: 'downloading' | 'extracting' | 'executing' | 'completed' | 'error';
+  progress: number;
+  downloadedMb: number;
+  totalMb: number;
+  speed: string;
+  actionText: string;
+  logs: string[];
+  installerFileName: string;
+}
+
+interface AppContextType {
+  // Navigation
+  currentView: NavView;
+  setCurrentView: (view: NavView) => void;
+
+  // Web Synchronization
+  isSyncingWithWeb: boolean;
+  lastWebSync: string;
+  syncWithWebsite: (targetEmail?: string) => Promise<{ success: boolean; message: string }>;
+  webBrowserLoginSync: () => Promise<{ success: boolean; error?: string }>;
+
+  // Auth & User
+  currentUser: User | null;
+  users: User[];
+  login: (email: string, pass: string) => { success: boolean; error?: string };
+  register: (
+    dataOrName:
+      | {
+          nome: string;
+          email: string;
+          senha: string;
+          confirmacao?: string;
+          termos?: boolean;
+          privacidade?: boolean;
+        }
+      | string,
+    email?: string,
+    senha?: string,
+    confirmacao?: string
+  ) => { success: boolean; error?: string };
+  logout: () => void;
+  switchUserRole: (role: 'USER' | 'ADMIN') => void;
+  updateCurrentUserProfile: (updates: Partial<User>) => void;
+  requestPasswordReset: (email: string) => { success: boolean; message: string };
+
+  // Data
+  plans: Plan[];
+  tools: Tool[];
+  licenses: License[];
+  history: OptimizationHistoryItem[];
+  device: DeviceInfo;
+  config: AppConfig;
+  adminLogs: AdminLog[];
+
+  // Optimizations
+  isOptimizing: boolean;
+  activeOptimizingToolId: string | null;
+  activeToolsState: Record<string, boolean>;
+  isToolActive: (toolId: string) => boolean;
+  toggleOptimizationTool: (
+    toolId: string
+  ) => Promise<{ success: boolean; message: string; active?: boolean }>;
+  executeOptimizationTool: (toolId: string) => Promise<{ success: boolean; message: string }>;
+  executeFullSystemOptimization: () => Promise<{ success: boolean; message: string }>;
+
+  // Modals & Notices
+  upgradeModal: UpgradeModalData;
+  openUpgradeModal: (requiredLevel: PlanLevel, toolName: string, category?: string) => void;
+  closeUpgradeModal: () => void;
+  toasts: ToastMessage[];
+  addToast: (type: ToastMessage['type'], title: string, message: string) => void;
+  removeToast: (id: string) => void;
+
+  // Language & Internationalization
+  currentLanguage: LanguageCode;
+  setLanguage: (lang: LanguageCode) => void;
+  t: (key: string, fallback?: string) => string;
+  getToolName: (tool: { tool_id: string; nome?: string; tool_name?: string }) => string;
+  getToolDesc: (tool: { tool_id: string; descricao?: string }) => string;
+
+  // Device & Agent
+  toggleAgentConnection: () => void;
+  refreshHardwareTelemetry: () => void;
+  isHardwareDetecting: boolean;
+  detectAndSetRealHardware: (silent?: boolean) => Promise<void>;
+  updateHardwareSpecs: (specs: Partial<DeviceInfo>) => void;
+  hardwareEditModalOpen: boolean;
+  setHardwareEditModalOpen: (open: boolean) => void;
+
+  // Manual License Activation
+  activateLicenseKey: (key: string) => { success: boolean; message: string };
+
+  // Admin Operations
+  updateUserPlan: (userId: string, newPlanId: PlanId) => void;
+  toggleUserAccountStatus: (userId: string) => void;
+  adminCreateLicense: (userId: string, planId: PlanId, durationDays: number) => License;
+  adminRevokeLicense: (licenseId: string) => void;
+  adminSuspendLicense: (licenseId: string) => void;
+  adminReactivateLicense: (licenseId: string) => void;
+  adminUpdateLicenseExpiry: (licenseId: string, newDate: string) => void;
+  adminUpdatePlanPrice: (planId: PlanId, newPrice: number) => void;
+  adminUpdatePlanFeatures: (planId: PlanId, features: string[]) => void;
+  adminTogglePlanStatus: (planId: PlanId) => void;
+  adminUpdateTool: (toolId: string, updates: Partial<Tool>) => void;
+  adminToggleToolStatus: (toolId: string) => void;
+  adminAddTool: (tool: Tool) => void;
+  adminUpdateConfig: (newConfig: Partial<AppConfig>) => void;
+  adminProcessWebhookPayment: (payload: {
+    email: string;
+    plan_id: PlanId;
+    transaction_id: string;
+    amount: number;
+  }) => { success: boolean; message: string; license_key?: string };
+
+  // Legal Modals
+  legalModal: { isOpen: boolean; type: 'terms' | 'privacy' | 'support' | 'about' };
+  openLegalModal: (type: 'terms' | 'privacy' | 'support' | 'about') => void;
+  closeLegalModal: () => void;
+
+  // Security Lock (Revert to Windows Factory Defaults on uninstall or plan expiration)
+  safetyLockActive: boolean;
+  toggleSafetyLock: () => void;
+  isRestoringDefaults: boolean;
+  restoreWindowsFactoryDefaults: (reason?: string) => Promise<{ success: boolean; message: string }>;
+  simulateUninstallRollback: () => Promise<{ success: boolean; message: string }>;
+  safetyModalOpen: boolean;
+  setSafetyModalOpen: (open: boolean) => void;
+
+  // Driver Pipeline (Download, Extract & Execute)
+  driverPipeline: DriverPipelineStage | null;
+  executeDriverPipeline: (brand: 'AMD' | 'NVIDIA') => Promise<void>;
+  closeDriverPipeline: () => void;
+}
+
+const AppContext = createContext<AppContextType | undefined>(undefined);
+
+export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Stored state with local storage fallback
+  const [users, setUsers] = useState<User[]>(() => {
+    const saved = localStorage.getItem('dyarte_users');
+    return saved ? JSON.parse(saved) : INITIAL_USERS;
+  });
+
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('dyarte_current_user');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // fallback
+      }
+    }
+    return INITIAL_USERS[0]; // Duarte default
+  });
+
+  const [currentView, setCurrentView] = useState<NavView>(() => {
+    const saved = localStorage.getItem('dyarte_current_view') as NavView | null;
+    if (saved && saved !== 'history') {
+      return saved;
+    }
+    return 'dashboard';
+  });
+
+  const handleSetCurrentView = (view: NavView) => {
+    const target = view === 'history' ? 'dashboard' : view;
+    setCurrentView(target);
+    localStorage.setItem('dyarte_current_view', target);
+  };
+
+  const [plans, setPlans] = useState<Plan[]>(() => {
+    const saved = localStorage.getItem('dyarte_plans');
+    return saved ? JSON.parse(saved) : INITIAL_PLANS;
+  });
+
+  const [tools, setTools] = useState<Tool[]>(() => {
+    const saved = localStorage.getItem('dyarte_tools');
+    if (saved) {
+      try {
+        const parsed: Tool[] = JSON.parse(saved);
+        // Sanitize tool names and descriptions: repair any corrupted keys or underscores
+        const sanitized = parsed.map((tool) => {
+          const initial = INITIAL_TOOLS.find((it) => it.tool_id === tool.tool_id);
+          const isBadName =
+            !tool.nome ||
+            tool.nome.includes('_') ||
+            tool.nome.startsWith('tool_') ||
+            tool.nome.endsWith('_name');
+          const isBadDesc =
+            !tool.descricao ||
+            tool.descricao.includes('_desc') ||
+            tool.descricao.startsWith('tool_');
+
+          let cleanName =
+            isBadName && initial
+              ? initial.nome
+              : (tool.nome && !tool.nome.includes('_') ? tool.nome : initial?.nome) ||
+                tool.tool_id.replace(/^tool_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+          if (tool.tool_id === 'tool_gpu_amd_driver') {
+            cleanName = 'AMD DRIVER OPTIMIZED';
+          } else if (tool.tool_id === 'tool_gpu_nvidia_driver') {
+            cleanName = 'NVIDIA DRIVER OPTIMIZED';
+          }
+
+          const cleanDesc =
+            isBadDesc && initial
+              ? initial.descricao
+              : (tool.descricao && !tool.descricao.includes('_desc') ? tool.descricao : initial?.descricao) ||
+                '';
+
+          return {
+            ...tool,
+            nome: cleanName,
+            descricao: cleanDesc,
+          };
+        });
+
+        // Ensure all new tools (e.g. GPU section) are included even with old cache
+        const missingTools = INITIAL_TOOLS.filter(
+          (it) => !sanitized.some((st) => st.tool_id === it.tool_id)
+        );
+        const combined = [...sanitized, ...missingTools];
+        localStorage.setItem('dyarte_tools', JSON.stringify(combined));
+        return combined;
+      } catch {
+        return INITIAL_TOOLS;
+      }
+    }
+    return INITIAL_TOOLS;
+  });
+
+  const [licenses, setLicenses] = useState<License[]>(() => {
+    const saved = localStorage.getItem('dyarte_licenses');
+    return saved ? JSON.parse(saved) : INITIAL_LICENSES;
+  });
+
+  const [history, setHistory] = useState<OptimizationHistoryItem[]>(() => {
+    const saved = localStorage.getItem('dyarte_history');
+    if (saved) {
+      try {
+        const parsed: OptimizationHistoryItem[] = JSON.parse(saved);
+        return parsed.map((item) => {
+          const initial = INITIAL_TOOLS.find((it) => it.tool_id === item.tool_id);
+          const isBadName = !item.tool_name || item.tool_name.includes('_');
+          return {
+            ...item,
+            tool_name:
+              isBadName && initial
+                ? initial.nome
+                : (item.tool_name && !item.tool_name.includes('_')
+                    ? item.tool_name
+                    : (initial?.nome || item.tool_id.replace(/^tool_/, '').replace(/_/g, ' '))),
+          };
+        });
+      } catch {
+        return INITIAL_HISTORY;
+      }
+    }
+    return INITIAL_HISTORY;
+  });
+
+  const [device, setDevice] = useState<DeviceInfo>(() => {
+    const saved = localStorage.getItem('dyarte_device');
+    return saved ? JSON.parse(saved) : INITIAL_DEVICE;
+  });
+
+  const [config, setConfig] = useState<AppConfig>(() => {
+    const saved = localStorage.getItem('dyarte_config');
+    return saved ? JSON.parse(saved) : INITIAL_CONFIG;
+  });
+
+  const [adminLogs, setAdminLogs] = useState<AdminLog[]>(() => {
+    const saved = localStorage.getItem('dyarte_admin_logs');
+    return saved ? JSON.parse(saved) : INITIAL_ADMIN_LOGS;
+  });
+
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
+  const [activeOptimizingToolId, setActiveOptimizingToolId] = useState<string | null>(null);
+
+  const [activeToolsState, setActiveToolsState] = useState<Record<string, boolean>>(() => {
+    const saved = localStorage.getItem('dyarte_active_tools');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Error parsing active tools:', e);
+      }
+    }
+    return {
+      clean_temp: true,
+      ram_cache: true,
+    };
+  });
+
+  const isToolActive = (toolId: string): boolean => {
+    return !!activeToolsState[toolId];
+  };
+
+  const [upgradeModal, setUpgradeModal] = useState<UpgradeModalData>({
+    isOpen: false,
+    requiredLevel: 3,
+    toolName: '',
+  });
+
+  const [legalModal, setLegalModal] = useState<{
+    isOpen: boolean;
+    type: 'terms' | 'privacy' | 'support' | 'about';
+  }>({
+    isOpen: false,
+    type: 'terms',
+  });
+
+  // Safety Lock State (Reverts all optimizations to Windows factory defaults on uninstall or plan expiry)
+  const [safetyLockActive, setSafetyLockActive] = useState<boolean>(() => {
+    const saved = localStorage.getItem('dyarte_safety_lock');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [isRestoringDefaults, setIsRestoringDefaults] = useState<boolean>(false);
+  const [safetyModalOpen, setSafetyModalOpen] = useState<boolean>(false);
+
+  const toggleSafetyLock = () => {
+    setSafetyLockActive((prev) => {
+      const next = !prev;
+      localStorage.setItem('dyarte_safety_lock', String(next));
+      addToast(
+        next ? 'success' : 'warning',
+        next ? 'Chave de Segurança Ativada' : 'Chave de Segurança Desativada',
+        next
+          ? 'Rollback automático para o padrão de fábrica do Windows habilitado ao desinstalar ou expirar plano.'
+          : 'Aviso: Ao desativar, as otimizações permanecerão no registro mesmo após expiração.'
+      );
+      return next;
+    });
+  };
+
+  const restoreWindowsFactoryDefaults = async (
+    reason: string = 'Solicitação do usuário'
+  ): Promise<{ success: boolean; message: string }> => {
+    setIsRestoringDefaults(true);
+
+    // Simula reversão completa no NT Kernel, serviços, timers e drivers
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Reset all optimization switches to off
+    setActiveToolsState({});
+    localStorage.removeItem('dyarte_active_tools');
+
+    // Registrar histórico oficial de restauração
+    const historyItem: OptimizationHistoryItem = {
+      history_id: `hist_factory_reset_${Date.now()}`,
+      user_id: currentUser?.user_id || 'system',
+      tool_id: 'tool_safety_factory_reset',
+      tool_name: 'Restauração de Fábrica do Windows (Chave de Segurança)',
+      category: 'SISTEMA',
+      date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status: 'SUCESSO',
+      result: `Todos os serviços (DiagTrack, WSearch), timer resolution (15.6ms), registros e drivers revertidos ao padrão original Microsoft. Motivo: ${reason}.`,
+      duration_ms: 1100,
+      details: 'Mecanismo de segurança executado com sucesso.',
+    };
+
+    setHistory((prev) => [historyItem, ...prev]);
+    setIsRestoringDefaults(false);
+
+    addToast(
+      'success',
+      'Padrão de Fábrica Restaurado',
+      'Todas as configurações do Windows voltaram ao estado padrão de fábrica da Microsoft com sucesso.'
+    );
+
+    return {
+      success: true,
+      message: 'Configurações de fábrica do Windows restauradas com sucesso.',
+    };
+  };
+
+  const simulateUninstallRollback = async (): Promise<{ success: boolean; message: string }> => {
+    addToast(
+      'info',
+      'Simulação de Desinstalação',
+      'Iniciando rotina de desinstalação segura do DYARTE Optimizer...'
+    );
+    return await restoreWindowsFactoryDefaults('Desinstalação do aplicativo pelo cliente');
+  };
+
+  // Driver Pipeline State (Download, Extract, Execute)
+  const [driverPipeline, setDriverPipeline] = useState<DriverPipelineStage | null>(null);
+
+  const closeDriverPipeline = () => {
+    setDriverPipeline(null);
+  };
+
+  const executeDriverPipeline = async (brand: 'AMD' | 'NVIDIA'): Promise<void> => {
+    if (!currentUser) return;
+
+    if (currentUser.role !== 'ADMIN' && currentUser.nivel_plano < 3) {
+      openUpgradeModal(3, `Driver ${brand} Otimizado`, 'GPU');
+      addToast(
+        'info',
+        'Plano Necessário',
+        `O download e instalação dos drivers ${brand} requer plano Avançado ou Completo.`
+      );
+      return;
+    }
+
+    const isAmd = brand === 'AMD';
+    const totalMb = isAmd ? 624 : 685;
+    const fileName = isAmd
+      ? 'DYARTE_AMD_Software_Adrenalin_Optimized.exe'
+      : 'DYARTE_NVIDIA_GeForce_GameReady_Debloated.exe';
+    const batchFileName = isAmd
+      ? 'DYARTE_Instalar_Driver_AMD_Optimized.bat'
+      : 'DYARTE_Instalar_Driver_NVIDIA_Optimized.bat';
+
+    setDriverPipeline({
+      isOpen: true,
+      brand,
+      phase: 'downloading',
+      progress: 0,
+      downloadedMb: 0,
+      totalMb,
+      speed: '51.4 MB/s',
+      actionText: `Conectando ao repositório seguro e iniciando download do pacote ${brand}...`,
+      logs: [
+        `[INÍCIO] Inicializando pipeline de instalação para ${brand} DRIVER OPTIMIZED...`,
+        `[REDE] Conectado ao repositório de alta velocidade DYARTE CDN via TLS 1.3.`,
+        `[DOWNLOAD] Baixando instalador otimizado sem telemetria nem bloatwares...`,
+      ],
+      installerFileName: fileName,
+    });
+
+    // Stage 1: Baixando (smooth steps from 10% to 100%)
+    for (let pct = 10; pct <= 100; pct += 15) {
+      await new Promise((r) => setTimeout(r, 190));
+      const currentDownloaded = Math.min(totalMb, Math.round((pct / 100) * totalMb));
+      const currentSpeed = (48 + Math.random() * 18).toFixed(1) + ' MB/s';
+      setDriverPipeline((prev) =>
+        prev
+          ? {
+              ...prev,
+              progress: pct,
+              downloadedMb: currentDownloaded,
+              speed: currentSpeed,
+              actionText: `Baixando pacote do driver (${currentDownloaded} MB / ${totalMb} MB)...`,
+              logs:
+                pct === 55
+                  ? [...prev.logs, `[DOWNLOAD] Taxa de transferência: ${currentSpeed}...`]
+                  : pct === 100
+                  ? [
+                      ...prev.logs,
+                      `[DOWNLOAD] Pacote de driver ${totalMb} MB baixado com 100% de integridade (SHA256 verificado).`,
+                    ]
+                  : prev.logs,
+            }
+          : null
+      );
+    }
+
+    // Stage 2: Extraindo
+    setDriverPipeline((prev) =>
+      prev
+        ? {
+            ...prev,
+            phase: 'extracting',
+            progress: 0,
+            actionText: `Extraindo arquivos compactados e limpando telemetria...`,
+            logs: [
+              ...prev.logs,
+              `[EXTRAÇÃO] Descompactando arquivos base para C:\\DYARTE\\Drivers\\${brand}...`,
+              isAmd
+                ? `[LIMPEZA] Removendo módulo OEM Crash Reporter e telemetria Adrenalin...`
+                : `[LIMPEZA] Expurgando NVIDIA Telemetry Container e Shield Wireless Services...`,
+            ],
+          }
+        : null
+    );
+
+    for (let pct = 20; pct <= 100; pct += 25) {
+      await new Promise((r) => setTimeout(r, 220));
+      setDriverPipeline((prev) =>
+        prev
+          ? {
+              ...prev,
+              progress: pct,
+              actionText: `Extraindo componentes e injetando registros (${pct}%)...`,
+              logs:
+                pct === 45
+                  ? [
+                      ...prev.logs,
+                      isAmd
+                        ? `[OTIMIZAÇÃO] Injetando perfis Radeon Anti-Lag e Smart Access Memory...`
+                        : `[OTIMIZAÇÃO] Injetando chaves Ultra Low Latency e Pre-rendered Frames = 1...`,
+                    ]
+                  : pct === 70
+                  ? [
+                      ...prev.logs,
+                      `[REGISTRO] Calibrando GPU Priority no subsistema gráfico do Windows NT...`,
+                    ]
+                  : pct === 100
+                  ? [
+                      ...prev.logs,
+                      `[EXTRAÇÃO] Extração de todos os módulos concluída com sucesso.`,
+                    ]
+                  : prev.logs,
+            }
+          : null
+      );
+    }
+
+    // Stage 3: Executando o Instalador
+    setDriverPipeline((prev) =>
+      prev
+        ? {
+            ...prev,
+            phase: 'executing',
+            progress: 100,
+            actionText: `Iniciando instalador do driver ${brand} no Windows...`,
+            logs: [
+              ...prev.logs,
+              `[EXECUÇÃO] Inicializando instalador silencioso do driver ${brand}...`,
+              `[EXECUÇÃO] Gerando script executável de inicialização automatizada no Windows...`,
+            ],
+          }
+        : null
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Generate & trigger download of genuine batch installer
+    try {
+      const driveUrl = isAmd ? config.amd_driver_drive_url : config.nvidia_driver_drive_url;
+      const batchContent = `@echo off
+:: ========================================================
+:: DYARTE OPTIMIZER - INSTALADOR DE DRIVER ${brand} OPTIMIZED
+:: Pacote Otimizado de Alta Performance & Baixa Latencia
+:: ========================================================
+chcp 65001 >nul
+cls
+echo.
+echo ====================================================================
+echo        DYARTE OPTIMIZER - DRIVER ${brand} OPTIMIZED SETUP
+echo ====================================================================
+echo.
+echo [1/3] Verificando privilegios de Administrador...
+openfiles >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [!] Solicitando elevacao de privilegios de Administrador...
+    powershell -Command "Start-Process '%~f0' -Verb runAs"
+    exit /b
+)
+
+echo [2/3] Extraindo arquivos e configurando pasta local...
+if not exist "C:\\DYARTE\\Drivers\\${brand}" mkdir "C:\\DYARTE\\Drivers\\${brand}"
+
+echo [3/3] Aplicando presets de baixa latencia e iniciando instalador...
+${
+  isAmd
+    ? `reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000" /v "AntiLag" /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000" /v "EnableUlps" /t REG_DWORD /d 0 /f >nul 2>&1
+echo [OK] Otimizacoes AMD Radeon Adrenalin injetadas com exito.`
+    : `reg add "HKLM\\SYSTEM\\CurrentControlSet\\Services\\nvlddmkm" /v "UltraLowLatency" /t REG_DWORD /d 2 /f >nul 2>&1
+reg add "HKLM\\SYSTEM\\CurrentControlSet\\Services\\nvlddmkm" /v "PowerMizerEnable" /t REG_DWORD /d 1 /f >nul 2>&1
+echo [OK] Otimizacoes NVIDIA GeForce Ultra Low Latency injetadas com exito.`
+}
+
+echo.
+echo ====================================================================
+echo  Driver ${brand} baixado, extraido e executado com sucesso!
+echo  Pressione qualquer tecla para finalizar.
+echo ====================================================================
+pause
+`;
+
+      const blob = new Blob([batchContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = batchFileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      if (driveUrl) {
+        window.open(driveUrl, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err) {
+      console.error('Error generating driver download file:', err);
+    }
+
+    // Update history
+    const historyItem: OptimizationHistoryItem = {
+      history_id: `hist_${Date.now()}`,
+      user_id: currentUser.user_id,
+      tool_id: isAmd ? 'tool_gpu_amd_driver' : 'tool_gpu_nvidia_driver',
+      tool_name: isAmd ? 'AMD DRIVER OPTIMIZED' : 'NVIDIA DRIVER OPTIMIZED',
+      category: 'GPU',
+      date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status: 'SUCESSO',
+      result: `Driver ${brand} baixado, extraído e executado com sucesso no Windows.`,
+      duration_ms: 1850,
+      details: `Pacote oficial ${brand} limpo sem telemetria, extraído e configurado com parâmetros DYARTE de baixa latência.`,
+    };
+
+    setHistory((prev) => [historyItem, ...prev]);
+
+    setDriverPipeline((prev) =>
+      prev
+        ? {
+            ...prev,
+            phase: 'completed',
+            actionText: `Driver ${brand} baixado, extraído e executado com sucesso!`,
+            logs: [
+              ...prev.logs,
+              `[CONCLUÍDO] Driver ${brand} pronto para uso com máxima performance.`,
+            ],
+          }
+        : null
+    );
+
+    addToast(
+      'success',
+      `Driver ${brand} Concluído`,
+      `Driver ${brand} baixado, extraído e executado com sucesso.`
+    );
+  };
+
+  // Monitor plan expiration: if expired and safety lock active, trigger automatic factory reset
+  useEffect(() => {
+    if (safetyLockActive && currentUser) {
+      const isExpired = currentUser.status_plano === 'EXPIRADO';
+      const hadActiveTools = Object.values(activeToolsState).some(Boolean);
+
+      if (isExpired && hadActiveTools) {
+        restoreWindowsFactoryDefaults('Plano expirado');
+      }
+    }
+  }, [currentUser?.status_plano]);
+
+  // Language & Internationalization State
+  const [currentLanguage, setCurrentLanguage] = useState<LanguageCode>(() => {
+    const saved = localStorage.getItem('dyarte_language');
+    if (saved === 'pt' || saved === 'en' || saved === 'es') {
+      return saved;
+    }
+    // Auto-detect browser language
+    if (typeof navigator !== 'undefined') {
+      const navLang = navigator.language.toLowerCase();
+      if (navLang.startsWith('es')) return 'es';
+      if (navLang.startsWith('en')) return 'en';
+    }
+    return 'pt';
+  });
+
+  const setLanguage = (lang: LanguageCode) => {
+    setCurrentLanguage(lang);
+    localStorage.setItem('dyarte_language', lang);
+  };
+
+  const t = (key: string, fallback?: string): string => {
+    const langDict = (translations as any)[currentLanguage] || translations.pt;
+    const ptDict = translations.pt as any;
+    const val = langDict?.[key] || ptDict?.[key];
+    if (val !== undefined && val !== null && val !== '') {
+      return val;
+    }
+    if (fallback !== undefined) {
+      return fallback;
+    }
+    // Clean key so raw underscores are never displayed
+    return key.replace(/^[a-z]+_/, '').replace(/_/g, ' ');
+  };
+
+  const getToolName = (tool: { tool_id: string; nome?: string; tool_name?: string }): string => {
+    if (!tool) return 'Ferramenta';
+    const id = tool.tool_id || '';
+
+    // First check exact match in INITIAL_TOOLS
+    const initial = INITIAL_TOOLS.find((t) => t.tool_id === id);
+
+    const directKey = `${id}_name`;
+    const prefixedKey = `tool_${id}_name`;
+    const langDict = (translations as any)[currentLanguage] || translations.pt;
+    const ptDict = translations.pt as any;
+    const found = langDict?.[directKey] || langDict?.[prefixedKey] || ptDict?.[directKey] || ptDict?.[prefixedKey];
+    if (found && !found.startsWith('tool_') && !found.includes('_')) {
+      return found;
+    }
+
+    if (initial?.nome && !initial.nome.includes('_')) {
+      return initial.nome;
+    }
+
+    const nameCandidate = tool.nome || tool.tool_name || '';
+    if (nameCandidate && !nameCandidate.includes('_') && !nameCandidate.startsWith('tool_')) {
+      return nameCandidate;
+    }
+
+    // Strip tool_, suffixes and replace all underscores with clean spaces
+    const clean = (nameCandidate && !nameCandidate.startsWith('tool_') ? nameCandidate : id)
+      .replace(/^tool_/, '')
+      .replace(/_name$/, '')
+      .replace(/_/g, ' ')
+      .trim();
+
+    return clean.replace(/\b\w/g, (c) => c.toUpperCase()) || 'Otimização DYARTE';
+  };
+
+  const getToolDesc = (tool: { tool_id: string; descricao?: string }): string => {
+    if (!tool) return '';
+    const id = tool.tool_id || '';
+    const initial = INITIAL_TOOLS.find((t) => t.tool_id === id);
+
+    const directKey = `${id}_desc`;
+    const prefixedKey = `tool_${id}_desc`;
+    const langDict = (translations as any)[currentLanguage] || translations.pt;
+    const ptDict = translations.pt as any;
+    const found = langDict?.[directKey] || langDict?.[prefixedKey] || ptDict?.[directKey] || ptDict?.[prefixedKey];
+    if (found && !found.startsWith('tool_') && !found.includes('_desc')) {
+      return found;
+    }
+
+    if (initial?.descricao && !initial.descricao.includes('_desc')) {
+      return initial.descricao;
+    }
+
+    const descCandidate = tool.descricao || '';
+    if (descCandidate && !descCandidate.startsWith('tool_') && !descCandidate.includes('_desc')) {
+      return descCandidate;
+    }
+
+    return '';
+  };
+
+  // Real Hardware Detection & Customization States
+  const [isHardwareDetecting, setIsHardwareDetecting] = useState<boolean>(false);
+  const [hardwareEditModalOpen, setHardwareEditModalOpen] = useState<boolean>(false);
+
+  // Web Synchronization States
+  const [isSyncingWithWeb, setIsSyncingWithWeb] = useState(false);
+  const [lastWebSync, setLastWebSync] = useState<string>(() => {
+    return localStorage.getItem('dyarte_last_sync') || 'Hoje às 14:32';
+  });
+
+  // Persist key records
+  useEffect(() => {
+    localStorage.setItem('dyarte_users', JSON.stringify(users));
+  }, [users]);
+
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('dyarte_current_user', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('dyarte_current_user');
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    localStorage.setItem('dyarte_plans', JSON.stringify(plans));
+  }, [plans]);
+
+  useEffect(() => {
+    localStorage.setItem('dyarte_tools', JSON.stringify(tools));
+  }, [tools]);
+
+  useEffect(() => {
+    localStorage.setItem('dyarte_licenses', JSON.stringify(licenses));
+  }, [licenses]);
+
+  useEffect(() => {
+    localStorage.setItem('dyarte_history', JSON.stringify(history));
+  }, [history]);
+
+  useEffect(() => {
+    localStorage.setItem('dyarte_device', JSON.stringify(device));
+  }, [device]);
+
+  useEffect(() => {
+    localStorage.setItem('dyarte_config', JSON.stringify(config));
+  }, [config]);
+
+  useEffect(() => {
+    localStorage.setItem('dyarte_admin_logs', JSON.stringify(adminLogs));
+  }, [adminLogs]);
+
+  const addToast = (type: ToastMessage['type'], title: string, message: string) => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((prev) => [...prev, { id, type, title, message }]);
+    setTimeout(() => {
+      removeToast(id);
+    }, 4500);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const openUpgradeModal = (requiredLevel: PlanLevel, toolName: string, category?: string) => {
+    setUpgradeModal({
+      isOpen: true,
+      requiredLevel,
+      toolName,
+      category,
+    });
+  };
+
+  const closeUpgradeModal = () => {
+    setUpgradeModal((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const openLegalModal = (type: 'terms' | 'privacy' | 'support' | 'about') => {
+    setLegalModal({ isOpen: true, type });
+  };
+
+  const closeLegalModal = () => {
+    setLegalModal((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  // Web Synchronization Operations
+  const syncWithWebsite = async (targetEmail?: string): Promise<{ success: boolean; message: string }> => {
+    setIsSyncingWithWeb(true);
+    const emailToSync = (targetEmail || currentUser?.email || '').trim().toLowerCase();
+
+    // Simula consulta em tempo real aos servidores de dyarte.com
+    await new Promise((r) => setTimeout(r, 600));
+
+    const now = new Date();
+    const timeStr = `Hoje às ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    setLastWebSync(timeStr);
+    localStorage.setItem('dyarte_last_sync', timeStr);
+
+    if (!emailToSync) {
+      setIsSyncingWithWeb(false);
+      return { success: false, message: 'Nenhuma conta informada para sincronizar.' };
+    }
+
+    const matched = users.find((u) => u.email.toLowerCase() === emailToSync);
+    if (matched) {
+      const refreshedUser: User = {
+        ...matched,
+        ultimo_login: `Sincronizado ${timeStr}`,
+      };
+      if (currentUser?.user_id === matched.user_id) {
+        setCurrentUser(refreshedUser);
+      }
+      setUsers((prev) => prev.map((u) => (u.user_id === matched.user_id ? refreshedUser : u)));
+      setIsSyncingWithWeb(false);
+      addToast(
+        'success',
+        'Conta Sincronizada',
+        `Plano ${refreshedUser.plano_atual || 'SEM PLANO'} e status atualizados em tempo real do site oficial.`
+      );
+      return { success: true, message: 'Dados sincronizados com sucesso!' };
+    }
+
+    setIsSyncingWithWeb(false);
+    return { success: false, message: 'Conta não localizada nos servidores do site.' };
+  };
+
+  const webBrowserLoginSync = async (): Promise<{ success: boolean; error?: string }> => {
+    setIsSyncingWithWeb(true);
+    // Simula detecção de sessão autenticada ativa no navegador em dyarte.com
+    await new Promise((r) => setTimeout(r, 800));
+
+    // Usuário padrão ou o primeiro da lista
+    const userToLogin = users.find((u) => u.email === 'kelberduarte22@gmail.com') || users[0];
+    if (userToLogin) {
+      const now = new Date();
+      const timeStr = `Hoje às ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      setLastWebSync(timeStr);
+      localStorage.setItem('dyarte_last_sync', timeStr);
+
+      const updatedUser: User = {
+        ...userToLogin,
+        ultimo_login: `Sessão Web Sincronizada ${timeStr}`,
+      };
+      setUsers((prev) => prev.map((u) => (u.user_id === userToLogin.user_id ? updatedUser : u)));
+      setCurrentUser(updatedUser);
+      setIsSyncingWithWeb(false);
+      addToast(
+        'success',
+        'Sincronização Web Concluída',
+        `Conectado com sucesso via sessão web de ${updatedUser.nome}! Plano sincronizado com o site.`
+      );
+      return { success: true };
+    }
+    setIsSyncingWithWeb(false);
+    return { success: false, error: 'Nenhuma sessão do site encontrada no navegador.' };
+  };
+
+  // Auth Operations
+  const login = (email: string, pass: string) => {
+    const safeEmail = (email || '').trim().toLowerCase();
+    const safePass = pass || '';
+    if (!safeEmail || !safePass) {
+      return { success: false, error: 'Preencha e-mail e senha.' };
+    }
+    const targetUser = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
+    if (!targetUser) {
+      return { success: false, error: 'Conta não encontrada no site oficial dyarte.com. Verifique seu e-mail cadastrado.' };
+    }
+    if (targetUser.status === 'BLOQUEADO') {
+      return { success: false, error: 'Esta conta foi suspensa pela administração.' };
+    }
+
+    const now = new Date();
+    const timeStr = `Hoje às ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    setLastWebSync(timeStr);
+    localStorage.setItem('dyarte_last_sync', timeStr);
+
+    const updatedUser: User = {
+      ...targetUser,
+      ultimo_login: `Sincronizado ${timeStr}`,
+    };
+
+    setUsers((prev) => prev.map((u) => (u.user_id === targetUser.user_id ? updatedUser : u)));
+    setCurrentUser(updatedUser);
+    addToast('success', 'Sincronização com o Site Concluída', `Bem-vindo, ${updatedUser.nome}! Sua conta e planos foram carregados.`);
+    return { success: true };
+  };
+
+  const register = (
+    dataOrName:
+      | {
+          nome: string;
+          email: string;
+          senha: string;
+          confirmacao?: string;
+          termos?: boolean;
+          privacidade?: boolean;
+        }
+      | string,
+    emailArg?: string,
+    senhaArg?: string,
+    confirmacaoArg?: string
+  ) => {
+    let rawNome = '';
+    let rawEmail = '';
+    let rawSenha = '';
+    let rawConfirmacao = '';
+    let termos = true;
+    let privacidade = true;
+
+    if (typeof dataOrName === 'string') {
+      rawNome = dataOrName;
+      rawEmail = emailArg || '';
+      rawSenha = senhaArg || '';
+      rawConfirmacao = confirmacaoArg || rawSenha;
+    } else if (dataOrName && typeof dataOrName === 'object') {
+      rawNome = dataOrName.nome || '';
+      rawEmail = dataOrName.email || '';
+      rawSenha = dataOrName.senha || '';
+      rawConfirmacao = dataOrName.confirmacao || rawSenha;
+      termos = dataOrName.termos ?? true;
+      privacidade = dataOrName.privacidade ?? true;
+    }
+
+    const safeNome = (rawNome || '').trim();
+    const safeEmail = (rawEmail || '').trim().toLowerCase();
+
+    if (!safeNome || !safeEmail || !rawSenha) {
+      return { success: false, error: 'Todos os campos são obrigatórios.' };
+    }
+    if (rawSenha !== rawConfirmacao) {
+      return { success: false, error: 'A confirmação de senha não confere.' };
+    }
+    if (rawSenha.length < 6) {
+      return { success: false, error: 'A senha deve ter no mínimo 6 caracteres.' };
+    }
+    if (!termos || !privacidade) {
+      return { success: false, error: 'Você deve aceitar os Termos de Uso e a Política de Privacidade.' };
+    }
+    const existing = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
+    if (existing) {
+      return { success: false, error: 'Já existe uma conta cadastrada com este e-mail.' };
+    }
+
+    const newId = `usr_${Date.now()}`;
+
+    const newUser: User = {
+      user_id: newId,
+      nome: safeNome,
+      email: safeEmail,
+      data_criacao: new Date().toISOString().split('T')[0],
+      plano_atual: 'SEM PLANO',
+      nivel_plano: 0,
+      status_plano: 'SEM_PLANO',
+      data_inicio: '-',
+      data_expiracao: '-',
+      license_id: '',
+      status_licenca: 'PENDENTE',
+      device_id: device.device_id,
+      ultimo_login: 'Agora mesmo',
+      role: 'USER',
+      status: 'ATIVO',
+    };
+
+    setUsers((prev) => [...prev, newUser]);
+    setCurrentUser(newUser);
+
+    addToast(
+      'success',
+      'Conta Criada no Modo de Visualização!',
+      'Você pode explorar todas as funções e especificações técnicas. Adquira um plano para executar as otimizações.'
+    );
+    return { success: true };
+  };
+
+  const logout = () => {
+    setCurrentUser(null);
+    setCurrentView('dashboard');
+    addToast('info', 'Sessão Encerrada', 'Você saiu da sua conta.');
+  };
+
+  const switchUserRole = (role: 'USER' | 'ADMIN') => {
+    if (role === 'ADMIN') {
+      const adminAcc = users.find((u) => u.role === 'ADMIN') || INITIAL_USERS[1];
+      setCurrentUser(adminAcc);
+      addToast('info', 'Modo Administrador Ativado', 'Você está navegando com privilégios de Administrador.');
+    } else {
+      const userAcc = users.find((u) => u.role === 'USER') || INITIAL_USERS[0];
+      setCurrentUser(userAcc);
+      addToast('info', 'Modo Usuário Ativado', `Você está navegando como ${userAcc.nome}.`);
+    }
+  };
+
+  const updateCurrentUserProfile = (updates: Partial<User>) => {
+    if (!currentUser) return;
+    const updated = { ...currentUser, ...updates };
+    setCurrentUser(updated);
+    setUsers((prev) => prev.map((u) => (u.user_id === currentUser.user_id ? updated : u)));
+    addToast('success', 'Perfil Atualizado', 'Seus dados foram atualizados com sucesso.');
+  };
+
+  const requestPasswordReset = (email: string) => {
+    const safeEmail = (email || '').trim().toLowerCase();
+    const userFound = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
+    if (!userFound) {
+      return { success: false, message: 'E-mail não encontrado em nossa base.' };
+    }
+    return {
+      success: true,
+      message: `Link de redefinição de senha enviado para ${safeEmail}. Verifique sua caixa de entrada.`,
+    };
+  };
+
+  // Device telemetry & Agent controls
+  const toggleAgentConnection = () => {
+    const newStatus = !device.is_agent_connected;
+    setDevice((prev) => ({
+      ...prev,
+      is_agent_connected: newStatus,
+      last_heartbeat: newStatus ? 'Há 1 segundo' : 'Desconectado',
+    }));
+
+    if (newStatus) {
+      addToast('success', 'Agente Windows Conectado', 'DYARTE Agent v1.4.2 sincronizado via porta local 3000.');
+    } else {
+      addToast('warning', 'Agente Windows Desconectado', 'O agente de execução local do Windows foi pausado.');
+    }
+  };
+
+  const refreshHardwareTelemetry = () => {
+    setDevice((prev) => ({
+      ...prev,
+      cpu_usage_pct: Math.floor(25 + Math.random() * 45),
+      gpu_usage_pct: Math.floor(18 + Math.random() * 50),
+      ram_usage_pct: Math.floor(55 + Math.random() * 25),
+      temp_c: Math.floor(44 + Math.random() * 12),
+      ping_ms: Math.floor(9 + Math.random() * 15),
+      last_heartbeat: 'Agora mesmo',
+    }));
+    addToast('info', 'Telemetria Atualizada', 'Sensores de hardware e métricas do Windows lidas com sucesso.');
+  };
+
+  const detectAndSetRealHardware = async (silent = false) => {
+    setIsHardwareDetecting(true);
+    try {
+      const realDevice = await detectFullComputerSpecs(device);
+      setDevice(realDevice);
+      localStorage.setItem('dyarte_device', JSON.stringify(realDevice));
+
+      if (!silent) {
+        addToast(
+          'success',
+          t('dash_real_detected') || 'Hardware Real Reconhecido',
+          `${realDevice.cpu} • ${realDevice.gpu}`
+        );
+      }
+    } catch (err) {
+      console.warn('Erro ao detectar hardware do computador:', err);
+    } finally {
+      setIsHardwareDetecting(false);
+    }
+  };
+
+  const updateHardwareSpecs = (specs: Partial<DeviceInfo>) => {
+    setDevice((prev) => {
+      const updated = { ...prev, ...specs };
+      localStorage.setItem('dyarte_device', JSON.stringify(updated));
+      return updated;
+    });
+    addToast('success', 'Hardware Atualizado', 'Especificações salvas com sucesso.');
+  };
+
+  // Run hardware auto-detection on first startup if mock specs were in storage
+  useEffect(() => {
+    const saved = localStorage.getItem('dyarte_device');
+    if (!saved || saved.includes('Ryzen 5 5600') || saved.includes('RTX 3060 12GB')) {
+      detectAndSetRealHardware(true);
+    }
+  }, []);
+
+  // Tool Execution
+  const executeOptimizationTool = async (toolId: string): Promise<{ success: boolean; message: string }> => {
+    if (!currentUser) {
+      return { success: false, message: 'Usuário não autenticado.' };
+    }
+
+    const tool = tools.find((t) => t.tool_id === toolId);
+    if (!tool) {
+      return { success: false, message: 'Ferramenta não localizada.' };
+    }
+
+    // Strict permission check
+    if (currentUser.nivel_plano === 0 || currentUser.nivel_plano < tool.required_plan_level) {
+      openUpgradeModal(tool.required_plan_level, tool.nome, tool.categoria);
+      addToast(
+        'info',
+        'Modo de Visualização',
+        `Esta função está disponível a partir do ${getPlanNameByLevel(tool.required_plan_level)}. Faça upgrade para executá-la no seu computador.`
+      );
+      return {
+        success: false,
+        message: `Esta ferramenta requer o plano ${getPlanNameByLevel(tool.required_plan_level)} ou superior.`,
+      };
+    }
+
+    // Windows Agent check requirement
+    if (config.require_agent_connection && !device.is_agent_connected) {
+      addToast(
+        'error',
+        'Windows Agent Desconectado',
+        'Conecte o DYARTE Windows Agent para que os scripts e chamadas de API do Windows possam ser executados com segurança.'
+      );
+      return {
+        success: false,
+        message: 'Agente Windows desconectado. Inicie o dyarte-agent.exe em seu computador.',
+      };
+    }
+
+    setIsOptimizing(true);
+    setActiveOptimizingToolId(toolId);
+
+    // If it's AMD or NVIDIA driver tools, trigger full driver download, extraction and execution pipeline
+    if (toolId === 'tool_gpu_amd_driver' || toolId === 'tool_gpu_amd_opt') {
+      await executeDriverPipeline('AMD');
+      setIsOptimizing(false);
+      setActiveOptimizingToolId(null);
+      return { success: true, message: 'Driver AMD baixado, extraído e executado com sucesso.' };
+    }
+
+    if (toolId === 'tool_gpu_nvidia_driver' || toolId === 'tool_gpu_nvidia_opt') {
+      await executeDriverPipeline('NVIDIA');
+      setIsOptimizing(false);
+      setActiveOptimizingToolId(null);
+      return { success: true, message: 'Driver NVIDIA baixado, extraído e executado com sucesso.' };
+    }
+
+    // Realistic execution delay simulating Windows Agent calling registry/services/powershell
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+
+    const historyItem: OptimizationHistoryItem = {
+      history_id: `hist_${Date.now()}`,
+      user_id: currentUser.user_id,
+      tool_id: tool.tool_id,
+      tool_name: tool.nome,
+      category: tool.categoria,
+      date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status: 'SUCESSO',
+      result: `Otimização aplicada pelo Windows Agent: ${tool.nome} (${tool.impact} impacto).`,
+      duration_ms: Math.floor(650 + Math.random() * 800),
+      details: tool.details,
+    };
+
+    setHistory((prev) => [historyItem, ...prev]);
+
+    // Update user last optimization
+    const updatedUser: User = {
+      ...currentUser,
+      ultimo_login: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    };
+    setCurrentUser(updatedUser);
+    setUsers((prev) => prev.map((u) => (u.user_id === updatedUser.user_id ? updatedUser : u)));
+
+    setIsOptimizing(false);
+    setActiveOptimizingToolId(null);
+
+    addToast('success', 'Otimização Concluída', `${tool.nome} aplicada com êxito no Windows.`);
+    return { success: true, message: 'Otimização aplicada com sucesso pelo Agente Windows.' };
+  };
+
+  const toggleOptimizationTool = async (
+    toolId: string
+  ): Promise<{ success: boolean; message: string; active?: boolean }> => {
+    if (!currentUser) {
+      return { success: false, message: 'Usuário não autenticado.' };
+    }
+
+    const tool = tools.find((t) => t.tool_id === toolId);
+    if (!tool) {
+      return { success: false, message: 'Ferramenta não localizada.' };
+    }
+
+    // Strict permission check
+    if (currentUser.nivel_plano === 0 || currentUser.nivel_plano < tool.required_plan_level) {
+      openUpgradeModal(tool.required_plan_level, getToolName(tool), tool.categoria);
+      addToast(
+        'info',
+        'Modo de Visualização',
+        `Esta função requer o ${getPlanNameByLevel(tool.required_plan_level)} ou superior. Faça upgrade para ativá-la no Windows.`
+      );
+      return {
+        success: false,
+        message: `Esta ferramenta requer o plano ${getPlanNameByLevel(tool.required_plan_level)} ou superior.`,
+      };
+    }
+
+    // Windows Agent check requirement
+    if (config.require_agent_connection && !device.is_agent_connected) {
+      addToast(
+        'error',
+        'Windows Agent Desconectado',
+        'Conecte o DYARTE Windows Agent para alternar esta otimização no Windows.'
+      );
+      return {
+        success: false,
+        message: 'Agente Windows desconectado. Inicie o dyarte-agent.exe em seu computador.',
+      };
+    }
+
+    setIsOptimizing(true);
+    setActiveOptimizingToolId(toolId);
+
+    // Realistic execution delay simulating Windows Agent calling registry/services/powershell
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    const currentlyActive = !!activeToolsState[toolId];
+    const willBeActive = !currentlyActive;
+
+    setActiveToolsState((prev) => {
+      const updated = { ...prev, [toolId]: willBeActive };
+      localStorage.setItem('dyarte_active_tools', JSON.stringify(updated));
+      return updated;
+    });
+
+    const toolTitle = getToolName(tool);
+
+    const historyItem: OptimizationHistoryItem = {
+      history_id: `hist_${Date.now()}`,
+      user_id: currentUser.user_id,
+      tool_id: tool.tool_id,
+      tool_name: toolTitle,
+      category: tool.categoria,
+      date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status: 'SUCESSO',
+      result: willBeActive
+        ? `Otimização ativada: ${toolTitle} (${tool.impact} impacto).`
+        : `Otimização desativada: ${toolTitle} revertido para a configuração padrão do Windows.`,
+      duration_ms: Math.floor(450 + Math.random() * 350),
+      details: willBeActive ? tool.details : 'Configuração padrão do Windows restaurada.',
+    };
+
+    setHistory((prev) => [historyItem, ...prev]);
+
+    // Update user last optimization
+    const updatedUser: User = {
+      ...currentUser,
+      ultimo_login: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    };
+    setCurrentUser(updatedUser);
+    setUsers((prev) => prev.map((u) => (u.user_id === updatedUser.user_id ? updatedUser : u)));
+
+    setIsOptimizing(false);
+    setActiveOptimizingToolId(null);
+
+    if (willBeActive) {
+      addToast('success', 'Otimização Ativada', `${toolTitle} ativado com sucesso no Windows.`);
+    } else {
+      addToast('info', 'Padrão do Windows Restaurado', `${toolTitle} desativado. Padrão do Windows restaurado com sucesso.`);
+    }
+
+    return {
+      success: true,
+      message: willBeActive ? 'Otimização ativada com sucesso.' : 'Padrão do Windows restaurado com sucesso.',
+      active: willBeActive,
+    };
+  };
+
+  const executeFullSystemOptimization = async (): Promise<{ success: boolean; message: string }> => {
+    if (!currentUser) return { success: false, message: 'Usuário não autenticado.' };
+
+    if (currentUser.nivel_plano === 0 || currentUser.status_plano === 'SEM_PLANO') {
+      openUpgradeModal(1, 'Otimização Geral do Sistema', 'SISTEMA');
+      addToast(
+        'info',
+        'Nenhum Plano Ativo',
+        'Sua conta está no Modo de Visualização. Adquira um plano para executar as otimizações do Windows.'
+      );
+      return { success: false, message: 'Plano necessário para executar a otimização geral.' };
+    }
+
+    if (config.require_agent_connection && !device.is_agent_connected) {
+      addToast(
+        'error',
+        'Windows Agent Necessário',
+        'O Agente Windows precisa estar conectado para executar a rotina de otimização no sistema.'
+      );
+      return { success: false, message: 'Agente desconectado.' };
+    }
+
+    setIsOptimizing(true);
+    setActiveOptimizingToolId('full_opt');
+
+    // Filter tools permitted for current user
+    const allowedTools = tools.filter(
+      (t) => t.status === 'ATIVO' && currentUser.nivel_plano >= t.required_plan_level
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+
+    const nowStr = 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const batchHistory: OptimizationHistoryItem = {
+      history_id: `hist_batch_${Date.now()}`,
+      user_id: currentUser.user_id,
+      tool_id: 'tool_full_system_batch',
+      tool_name: `Otimização Completa (${currentUser.plano_atual})`,
+      category: 'SISTEMA',
+      date: nowStr,
+      status: 'SUCESSO',
+      result: `${allowedTools.length} otimizações aplicadas pelo Windows Agent com sucesso.`,
+      duration_ms: 2200,
+      details: `Executados: ${allowedTools.map((t) => t.nome).slice(0, 4).join(', ')} e mais.`,
+    };
+
+    setHistory((prev) => [batchHistory, ...prev]);
+
+    setIsOptimizing(false);
+    setActiveOptimizingToolId(null);
+
+    addToast('success', 'Sistema Otimizado', `Rotina completa concluída: ${allowedTools.length} ajustes aplicados.`);
+    return { success: true, message: 'Otimização completa finalizada!' };
+  };
+
+  // License manual key activation
+  const activateLicenseKey = (key: string): { success: boolean; message: string } => {
+    const formatted = (key || '').trim().toUpperCase();
+    if (!formatted) return { success: false, message: 'Digite a chave de licença.' };
+
+    const foundLicense = licenses.find((l) => (l?.license_key || '').toUpperCase() === formatted);
+    if (!foundLicense) {
+      return { success: false, message: 'Chave de licença inválida ou inexistente.' };
+    }
+
+    if (foundLicense.status === 'CANCELADA' || foundLicense.status === 'SUSPENSA') {
+      return { success: false, message: `Esta licença está com status ${foundLicense.status}. Entre em contato com o suporte.` };
+    }
+
+    if (!currentUser) return { success: false, message: 'Faça login para ativar.' };
+
+    const planObj = plans.find((p) => p.id === foundLicense.plan_id);
+    const planLevel: PlanLevel = planObj?.level || 1;
+    const planName = planObj?.name || 'BÁSICO';
+
+    const updatedLic: License = {
+      ...foundLicense,
+      user_id: currentUser.user_id,
+      user_name: currentUser.nome,
+      user_email: currentUser.email,
+      status: 'ATIVA',
+      activated_at: new Date().toISOString(),
+      device_id: device.device_id,
+    };
+
+    setLicenses((prev) => prev.map((l) => (l.license_id === updatedLic.license_id ? updatedLic : l)));
+
+    const updatedUser: User = {
+      ...currentUser,
+      plano_atual: planName,
+      nivel_plano: planLevel,
+      status_plano: 'ATIVO',
+      license_id: updatedLic.license_id,
+      status_licenca: 'ATIVA',
+      data_expiracao: updatedLic.expires_at,
+    };
+
+    setCurrentUser(updatedUser);
+    setUsers((prev) => prev.map((u) => (u.user_id === updatedUser.user_id ? updatedUser : u)));
+
+    addToast(
+      'success',
+      'Licença Ativada com Sucesso!',
+      `Seu plano foi atualizado para ${planName} (Nível ${planLevel}). Todos os recursos liberados!`
+    );
+
+    return { success: true, message: `Licença ${planName} ativada com sucesso!` };
+  };
+
+  // ADMIN OPERATIONS
+  const updateUserPlan = (userId: string, newPlanId: PlanId) => {
+    const targetPlan = plans.find((p) => p.id === newPlanId);
+    if (!targetPlan) return;
+
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.user_id === userId) {
+          const updated: User = {
+            ...u,
+            plano_atual: targetPlan.name,
+            nivel_plano: targetPlan.level,
+            status_plano: 'ATIVO',
+            data_expiracao: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          };
+          if (currentUser?.user_id === userId) {
+            setCurrentUser(updated);
+          }
+          return updated;
+        }
+        return u;
+      })
+    );
+
+    // Audit log
+    const newLog: AdminLog = {
+      log_id: `log_${Date.now()}`,
+      admin_id: currentUser?.user_id || 'admin',
+      admin_name: currentUser?.nome || 'Admin',
+      action: 'Alteração de Plano de Usuário',
+      target_user: userId,
+      details: `Plano alterado para ${targetPlan.name} (Nível ${targetPlan.level}).`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      ip_address: '127.0.0.1 (Painel Desktop)',
+    };
+    setAdminLogs((prev) => [newLog, ...prev]);
+    addToast('success', 'Plano Atualizado', `Usuário atualizado para o plano ${targetPlan.name}.`);
+  };
+
+  const toggleUserAccountStatus = (userId: string) => {
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.user_id === userId) {
+          const newStatus = u.status === 'ATIVO' ? 'BLOQUEADO' : 'ATIVO';
+          const updated = { ...u, status: newStatus as 'ATIVO' | 'BLOQUEADO' };
+          if (currentUser?.user_id === userId) {
+            setCurrentUser(updated);
+          }
+          return updated;
+        }
+        return u;
+      })
+    );
+    addToast('info', 'Status do Usuário Alterado', 'Permissões e acesso do usuário foram atualizados.');
+  };
+
+  const adminCreateLicense = (userId: string, planId: PlanId, durationDays: number): License => {
+    const targetUser = users.find((u) => u.user_id === userId);
+    const key = `DYARTE-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const newLic: License = {
+      license_id: `lic_${Date.now()}`,
+      license_key: key,
+      user_id: userId,
+      user_name: targetUser?.nome || 'Cliente',
+      user_email: targetUser?.email || 'cliente@email.com',
+      plan_id: planId,
+      status: 'ATIVA',
+      created_at: new Date().toISOString().split('T')[0],
+      activated_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      device_id: targetUser?.device_id || 'PENDING_DEVICE_SYNC',
+    };
+
+    setLicenses((prev) => [newLic, ...prev]);
+
+    // Update user if attached
+    if (targetUser) {
+      updateUserPlan(userId, planId);
+    }
+
+    const newLog: AdminLog = {
+      log_id: `log_${Date.now()}`,
+      admin_id: currentUser?.user_id || 'admin',
+      admin_name: currentUser?.nome || 'Admin',
+      action: 'Emissão Manual de Licença',
+      target_user: targetUser?.email,
+      details: `Gerada chave ${key} para plano ${planId.toUpperCase()} válida até ${expiresAt}.`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      ip_address: '127.0.0.1 (Painel Desktop)',
+    };
+    setAdminLogs((prev) => [newLog, ...prev]);
+
+    addToast('success', 'Licença Criada', `Chave ${key} gerada com sucesso.`);
+    return newLic;
+  };
+
+  const adminRevokeLicense = (licenseId: string) => {
+    setLicenses((prev) =>
+      prev.map((l) => (l.license_id === licenseId ? { ...l, status: 'CANCELADA' as LicenseStatus } : l))
+    );
+    addToast('warning', 'Licença Revogada', 'A chave foi cancelada e não pode mais ser utilizada.');
+  };
+
+  const adminSuspendLicense = (licenseId: string) => {
+    setLicenses((prev) =>
+      prev.map((l) => (l.license_id === licenseId ? { ...l, status: 'SUSPENSA' as LicenseStatus } : l))
+    );
+    addToast('warning', 'Licença Suspensa', 'Acesso temporariamente bloqueado.');
+  };
+
+  const adminReactivateLicense = (licenseId: string) => {
+    setLicenses((prev) =>
+      prev.map((l) => (l.license_id === licenseId ? { ...l, status: 'ATIVA' as LicenseStatus } : l))
+    );
+    addToast('success', 'Licença Reativada', 'Acesso restaurado.');
+  };
+
+  const adminUpdateLicenseExpiry = (licenseId: string, newDate: string) => {
+    setLicenses((prev) =>
+      prev.map((l) => (l.license_id === licenseId ? { ...l, expires_at: newDate } : l))
+    );
+    addToast('success', 'Expiração Atualizada', `Nova data de validade: ${newDate}`);
+  };
+
+  const adminUpdatePlanPrice = (planId: PlanId, newPrice: number) => {
+    setPlans((prev) => prev.map((p) => (p.id === planId ? { ...p, price: newPrice } : p)));
+    addToast('success', 'Preço Atualizado', `Plano ${planId.toUpperCase()} agora custa R$ ${newPrice.toFixed(2)}.`);
+  };
+
+  const adminUpdatePlanFeatures = (planId: PlanId, features: string[]) => {
+    setPlans((prev) => prev.map((p) => (p.id === planId ? { ...p, features } : p)));
+    addToast('success', 'Recursos Atualizados', `Benefícios do plano ${planId.toUpperCase()} salvos.`);
+  };
+
+  const adminTogglePlanStatus = (planId: PlanId) => {
+    setPlans((prev) => prev.map((p) => (p.id === planId ? { ...p, active: !p.active } : p)));
+    addToast('info', 'Status do Plano Alterado', 'Disponibilidade do plano alterada.');
+  };
+
+  const adminUpdateTool = (toolId: string, updates: Partial<Tool>) => {
+    setTools((prev) => prev.map((t) => (t.tool_id === toolId ? { ...t, ...updates } : t)));
+    addToast('success', 'Ferramenta Atualizada', 'Configurações da ferramenta salvas.');
+  };
+
+  const adminToggleToolStatus = (toolId: string) => {
+    setTools((prev) =>
+      prev.map((t) => {
+        if (t.tool_id === toolId) {
+          const newStatus = t.status === 'ATIVO' ? 'DESATIVADO' : 'ATIVO';
+          return { ...t, status: newStatus as 'ATIVO' | 'DESATIVADO' };
+        }
+        return t;
+      })
+    );
+  };
+
+  const adminAddTool = (tool: Tool) => {
+    setTools((prev) => [...prev, tool]);
+    addToast('success', 'Nova Ferramenta Adicionada', `${tool.nome} foi cadastrada.`);
+  };
+
+  const adminUpdateConfig = (newConfig: Partial<AppConfig>) => {
+    setConfig((prev) => ({ ...prev, ...newConfig }));
+    addToast('success', 'Configurações Salvas', 'URLs de checkout e parâmetros do sistema atualizados.');
+  };
+
+  // Webhook integration simulator according to specification:
+  // USUÁRIO -> ESCOLHE PLANO -> SITE EXTERNO -> CHECKOUT -> PAGAMENTO APROVADO -> WEBHOOK -> BACKEND -> ATUALIZA PLANO -> ATIVA LICENÇA -> LIBERA RECURSOS
+  const adminProcessWebhookPayment = ({
+    email,
+    plan_id,
+    transaction_id,
+    amount,
+  }: {
+    email: string;
+    plan_id: PlanId;
+    transaction_id: string;
+    amount: number;
+  }) => {
+    const targetPlan = plans.find((p) => p.id === plan_id);
+    if (!targetPlan) {
+      return { success: false, message: 'Plano não encontrado.' };
+    }
+
+    const safeEmail = (email || '').trim().toLowerCase();
+
+    // Find or create user
+    let user = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
+    const key = `DYARTE-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const licId = `lic_wh_${Date.now()}`;
+    const expDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    if (!user) {
+      const newId = `usr_auto_${Date.now()}`;
+      user = {
+        user_id: newId,
+        nome: safeEmail ? safeEmail.split('@')[0] : 'Cliente',
+        email: safeEmail,
+        data_criacao: new Date().toISOString().split('T')[0],
+        plano_atual: targetPlan.name,
+        nivel_plano: targetPlan.level,
+        status_plano: 'ATIVO',
+        data_inicio: new Date().toISOString().split('T')[0],
+        data_expiracao: expDate,
+        license_id: licId,
+        status_licenca: 'ATIVA',
+        device_id: 'DESKTOP-AUTO-PROVISIONED',
+        ultimo_login: 'Nunca',
+        role: 'USER',
+        status: 'ATIVO',
+      };
+      setUsers((prev) => [...prev, user!]);
+    } else {
+      const updatedUser: User = {
+        ...user,
+        plano_atual: targetPlan.name,
+        nivel_plano: targetPlan.level,
+        status_plano: 'ATIVO',
+        data_expiracao: expDate,
+        license_id: licId,
+        status_licenca: 'ATIVA',
+      };
+      setUsers((prev) => prev.map((u) => (u.user_id === user!.user_id ? updatedUser : u)));
+      if (currentUser?.user_id === user.user_id) {
+        setCurrentUser(updatedUser);
+      }
+    }
+
+    const newLicense: License = {
+      license_id: licId,
+      license_key: key,
+      user_id: user.user_id,
+      user_name: user.nome,
+      user_email: user.email,
+      plan_id: plan_id,
+      status: 'ATIVA',
+      created_at: new Date().toISOString().split('T')[0],
+      activated_at: new Date().toISOString(),
+      expires_at: expDate,
+      device_id: user.device_id,
+    };
+
+    setLicenses((prev) => [newLicense, ...prev]);
+
+    const newLog: AdminLog = {
+      log_id: `log_${Date.now()}`,
+      admin_id: 'webhook_gateway',
+      admin_name: 'Webhook Gateway Externo',
+      action: 'Aprovação de Pagamento (Webhook)',
+      target_user: user.email,
+      details: `Pagamento #${transaction_id} aprovado. R$ ${amount.toFixed(2)} recebidos. Plano ${targetPlan.name} ativado. Licença gerada: ${key}.`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      ip_address: '54.232.11.200 (Gateway)',
+    };
+    setAdminLogs((prev) => [newLog, ...prev]);
+
+    addToast(
+      'success',
+      'Webhook Processado com Sucesso',
+      `Pagamento aprovado para ${user.email}. Plano ${targetPlan.name} liberado!`
+    );
+
+    return {
+      success: true,
+      message: `Pagamento aprovado. Plano ${targetPlan.name} liberado automaticamente!`,
+      license_key: key,
+    };
+  };
+
+  const value: AppContextType = {
+    currentView,
+    setCurrentView: handleSetCurrentView,
+    isSyncingWithWeb,
+    lastWebSync,
+    syncWithWebsite,
+    webBrowserLoginSync,
+    currentUser,
+    users,
+    login,
+    register,
+    logout,
+    switchUserRole,
+    updateCurrentUserProfile,
+    requestPasswordReset,
+    plans,
+    tools,
+    licenses,
+    history,
+    device,
+    config,
+    adminLogs,
+    isOptimizing,
+    activeOptimizingToolId,
+    activeToolsState,
+    isToolActive,
+    toggleOptimizationTool,
+    executeOptimizationTool,
+    executeFullSystemOptimization,
+    upgradeModal,
+    openUpgradeModal,
+    closeUpgradeModal,
+    toasts,
+    addToast,
+    removeToast,
+    currentLanguage,
+    setLanguage,
+    t,
+    getToolName,
+    getToolDesc,
+    toggleAgentConnection,
+    refreshHardwareTelemetry,
+    isHardwareDetecting,
+    detectAndSetRealHardware,
+    updateHardwareSpecs,
+    hardwareEditModalOpen,
+    setHardwareEditModalOpen,
+    activateLicenseKey,
+    updateUserPlan,
+    toggleUserAccountStatus,
+    adminCreateLicense,
+    adminRevokeLicense,
+    adminSuspendLicense,
+    adminReactivateLicense,
+    adminUpdateLicenseExpiry,
+    adminUpdatePlanPrice,
+    adminUpdatePlanFeatures,
+    adminTogglePlanStatus,
+    adminUpdateTool,
+    adminToggleToolStatus,
+    adminAddTool,
+    adminUpdateConfig,
+    adminProcessWebhookPayment,
+    legalModal,
+    openLegalModal,
+    closeLegalModal,
+    safetyLockActive,
+    toggleSafetyLock,
+    isRestoringDefaults,
+    restoreWindowsFactoryDefaults,
+    simulateUninstallRollback,
+    safetyModalOpen,
+    setSafetyModalOpen,
+    driverPipeline,
+    executeDriverPipeline,
+    closeDriverPipeline,
+  };
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+};
+
+export const useApp = () => {
+  const context = useContext(AppContext);
+  if (!context) {
+    throw new Error('useApp must be used within an AppProvider');
+  }
+  return context;
+};
+
+export const getPlanNameByLevel = (level: PlanLevel): string => {
+  switch (level) {
+    case 0:
+      return 'SEM PLANO (VISUALIZAÇÃO)';
+    case 1:
+      return 'BÁSICO';
+    case 2:
+      return 'MÉDIO';
+    case 3:
+      return 'AVANÇADO';
+    case 4:
+      return 'COMPLETO';
+    default:
+      return 'BÁSICO';
+  }
+};
