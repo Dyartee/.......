@@ -35,6 +35,7 @@ import {
   onAuthStateChanged,
 } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { agentBridge } from '../services/agentBridge';
 
 export type NavView =
   | 'dashboard'
@@ -148,6 +149,7 @@ interface AppContextType {
 
   // Device & Agent
   toggleAgentConnection: () => void;
+  testAgentConnection: () => Promise<{ success: boolean; agent_version?: string; request_id?: string; error?: string }>;
   refreshHardwareTelemetry: () => void;
   isHardwareDetecting: boolean;
   detectAndSetRealHardware: (silent?: boolean) => Promise<void>;
@@ -161,6 +163,7 @@ interface AppContextType {
   // Admin Operations
   updateUserPlan: (userId: string, newPlanId: PlanId) => void;
   toggleUserAccountStatus: (userId: string) => void;
+  deleteUserAccount: (userId: string) => void;
   adminCreateLicense: (userId: string, planId: PlanId, durationDays: number) => License;
   adminRevokeLicense: (licenseId: string) => void;
   adminSuspendLicense: (licenseId: string) => void;
@@ -1364,20 +1367,58 @@ pause
     }
   };
 
-  // Device telemetry & Agent controls
-  const toggleAgentConnection = () => {
-    const newStatus = !device.is_agent_connected;
-    setDevice((prev) => ({
-      ...prev,
-      is_agent_connected: newStatus,
-      last_heartbeat: newStatus ? 'Há 1 segundo' : 'Desconectado',
-    }));
+  // Device telemetry & Agent controls (Real connection to 127.0.0.1:49152)
+  useEffect(() => {
+    const unsub = agentBridge.onStateChange((state) => {
+      const isOnline = state === 'AGENT_ONLINE';
+      setDevice((prev) => ({
+        ...prev,
+        is_agent_connected: isOnline,
+        agent_version: '1.0.0',
+        last_heartbeat: isOnline
+          ? 'Online (127.0.0.1:49152)'
+          : state === 'AGENT_CONNECTING'
+          ? 'Conectando ao agente...'
+          : state === 'AGENT_ERROR'
+          ? 'Erro de conexão'
+          : 'Desconectado',
+      }));
+    });
 
-    if (newStatus) {
-      addToast('success', 'Agente Windows Conectado', 'DYARTE Agent v1.4.2 sincronizado via porta local 3000.');
+    agentBridge.connect();
+
+    return () => {
+      unsub();
+      agentBridge.disconnect();
+    };
+  }, []);
+
+  const toggleAgentConnection = () => {
+    if (agentBridge.getState() === 'AGENT_ONLINE') {
+      agentBridge.disconnect();
+      addToast('warning', 'Agente Windows Desconectado', 'Conexão com o dyarte-agent.exe encerrada.');
     } else {
-      addToast('warning', 'Agente Windows Desconectado', 'O agente de execução local do Windows foi pausado.');
+      agentBridge.connect();
+      addToast('info', 'Conectando ao Agente', 'Buscando dyarte-agent.exe em 127.0.0.1:49152...');
     }
+  };
+
+  const testAgentConnection = async () => {
+    const res = await agentBridge.testConnection();
+    if (res.success) {
+      addToast(
+        'success',
+        'Agente Windows Testado',
+        `Comunicação validada com sucesso! Versão do agente: ${res.agent_version || '1.0.0'}`
+      );
+    } else {
+      addToast(
+        'error',
+        'Falha no Teste do Agente',
+        res.error || 'Não foi possível comunicar com o dyarte-agent.exe em 127.0.0.1:49152.'
+      );
+    }
+    return res;
   };
 
   const refreshHardwareTelemetry = () => {
@@ -1782,6 +1823,12 @@ pause
     addToast('info', 'Status do Usuário Alterado', 'Permissões e acesso do usuário foram atualizados.');
   };
 
+  const deleteUserAccount = (userId: string) => {
+    setUsers((prev) => prev.filter((u) => u.user_id !== userId));
+    setLicenses((prev) => prev.filter((l) => l.user_id !== userId));
+    addToast('info', 'Conta Removida', 'O usuário foi removido da lista local.');
+  };
+
   const adminCreateLicense = (userId: string, planId: PlanId, durationDays: number): License => {
     const targetUser = users.find((u) => u.user_id === userId);
     const key = `DYARTE-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -2040,6 +2087,7 @@ pause
     getToolName,
     getToolDesc,
     toggleAgentConnection,
+    testAgentConnection,
     refreshHardwareTelemetry,
     isHardwareDetecting,
     detectAndSetRealHardware,
@@ -2049,6 +2097,7 @@ pause
     activateLicenseKey,
     updateUserPlan,
     toggleUserAccountStatus,
+    deleteUserAccount,
     adminCreateLicense,
     adminRevokeLicense,
     adminSuspendLicense,

@@ -290,6 +290,39 @@ export const AdminView: React.FC = () => {
     await loadRealDataFromDb();
   };
 
+  const handleDeleteUser = async (userId: string, userName: string) => {
+    if (
+      !window.confirm(
+        `Tem certeza que deseja remover permanentemente a conta de "${userName}"? Esta ação excluirá os dados e licenças associadas do sistema.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/admin/user/${userId}`, {
+        method: 'DELETE',
+        headers,
+      });
+
+      if (res.ok) {
+        addToast('success', 'Conta Excluída', `A conta de ${userName} foi removida permanentemente.`);
+        setDbUsers((prev) => prev.filter((u) => u.user_id !== userId));
+      } else {
+        const data = await res.json().catch(() => ({}));
+        addToast('error', 'Falha ao Excluir', data.error || 'Não foi possível remover a conta.');
+      }
+    } catch (err) {
+      console.error(err);
+      addToast('error', 'Erro de Conexão', 'Falha ao conectar com o servidor para exclusão da conta.');
+    }
+    await loadRealDataFromDb();
+  };
+
   const handleCreateLicenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -630,17 +663,27 @@ export const AdminView: React.FC = () => {
                           </span>
                         </td>
 
-                        <td className="p-3 text-right pr-4 space-x-2">
+                        <td className="p-3 text-right pr-4 space-x-2 whitespace-nowrap">
                           <button
                             onClick={() => handleToggleUserAccountStatus(user.user_id, user.status)}
                             className={`px-2.5 py-1 rounded text-[11px] font-mono font-semibold transition-colors cursor-pointer ${
                               user.status === 'ATIVO'
-                                ? 'bg-red-950/50 hover:bg-red-950 text-red-400 border border-red-800/50'
+                                ? 'bg-amber-950/40 hover:bg-amber-950 text-amber-400 border border-amber-800/40'
                                 : 'bg-emerald-950/50 hover:bg-emerald-950 text-emerald-400 border border-emerald-800/50'
                             }`}
                           >
                             {user.status === 'ATIVO' ? 'Bloquear' : 'Desbloquear'}
                           </button>
+                          {user.email.toLowerCase() !== 'kelberduarte22@gmail.com' && (
+                            <button
+                              onClick={() => handleDeleteUser(user.user_id, user.nome)}
+                              className="px-2.5 py-1 rounded text-[11px] font-mono font-semibold bg-red-950/50 hover:bg-red-950 text-red-400 border border-red-800/50 transition-colors cursor-pointer inline-flex items-center gap-1"
+                              title="Remover conta permanentemente"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Excluir</span>
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );

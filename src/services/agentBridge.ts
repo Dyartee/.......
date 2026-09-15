@@ -1,6 +1,6 @@
 /**
  * DYARTE OPTIMIZER - Local Agent Bridge
- * Conexão segura via WebSocket local (127.0.0.1:49152) com o dYARTE-agent.exe
+ * Conexão segura via WebSocket local (127.0.0.1:49152) com o dyarte-agent.exe
  */
 
 import {
@@ -8,11 +8,16 @@ import {
   SystemTelemetry,
   TelemetrySnapshot,
   OptimizationToolState,
-  OptimizationBackupRecord,
 } from './telemetryTypes';
 
 export type AgentMessageListener = (snapshot: TelemetrySnapshot) => void;
 export type AgentStateListener = (state: AgentConnectionState) => void;
+
+interface PendingRequest {
+  resolve: (response: any) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
 
 class AgentBridgeService {
   private socket: WebSocket | null = null;
@@ -21,28 +26,22 @@ class AgentBridgeService {
   private stateListeners: Set<AgentStateListener> = new Set();
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
-  private localToken: string = '';
   private currentSnapshot: TelemetrySnapshot | null = null;
+  private lastPingTimestamp: number = 0;
+  private lastLatencyMs: number = 0;
+
+  private pendingRequests: Map<string, PendingRequest> = new Map();
 
   private readonly AGENT_PORT = 49152;
   private readonly AGENT_HOST = '127.0.0.1'; // Conexão estrita em loopback local
   private readonly PROTOCOL_VERSION = 1;
 
-  constructor() {
-    // Carrega ou gera token local efêmero de handshake
-    if (typeof window !== 'undefined') {
-      const storedToken = sessionStorage.getItem('dyarte_agent_local_token');
-      if (storedToken) {
-        this.localToken = storedToken;
-      } else {
-        this.localToken = `tk_${Math.random().toString(36).substring(2, 15)}_${Date.now()}`;
-        sessionStorage.setItem('dyarte_agent_local_token', this.localToken);
-      }
-    }
-  }
-
   public getState(): AgentConnectionState {
     return this.connectionState;
+  }
+
+  public getLatency(): number {
+    return this.lastLatencyMs;
   }
 
   public getLatestTelemetry(): SystemTelemetry | null {
@@ -66,29 +65,39 @@ class AgentBridgeService {
   private setState(newState: AgentConnectionState) {
     if (this.connectionState !== newState) {
       this.connectionState = newState;
-      this.stateListeners.forEach((listener) => listener(newState));
+      this.stateListeners.forEach((listener) => {
+        try {
+          listener(newState);
+        } catch (err) {
+          console.error('Erro no listener de estado do agente:', err);
+        }
+      });
     }
   }
 
   /**
-   * Inicia a conexão com o dyarte-agent.exe em 127.0.0.1
+   * 1. Conectar ao dyarte-agent.exe em 127.0.0.1:49152
    */
   public connect() {
     if (typeof window === 'undefined') return;
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+
+    // Evita abrir múltiplos sockets simultâneos
+    if (
+      this.socket &&
+      (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)
+    ) {
       return;
     }
 
     this.setState('AGENT_CONNECTING');
 
     try {
-      const wsUrl = `ws://${this.AGENT_HOST}:${this.AGENT_PORT}?token=${encodeURIComponent(this.localToken)}&v=${this.PROTOCOL_VERSION}`;
+      const wsUrl = `ws://${this.AGENT_HOST}:${this.AGENT_PORT}`;
       this.socket = new WebSocket(wsUrl);
 
       this.socket.onopen = () => {
-        this.setState('AGENT_ONLINE');
+        // Envia handshake inicial. Estado transita para ONLINE apenas após HANDSHAKE_ACK
         this.sendHandshake();
-        this.startHeartbeat();
       };
 
       this.socket.onmessage = (event) => {
@@ -101,16 +110,17 @@ class AgentBridgeService {
       };
 
       this.socket.onerror = () => {
-        this.setState('AGENT_OFFLINE');
+        this.setState('AGENT_ERROR');
       };
 
       this.socket.onclose = () => {
         this.setState('AGENT_OFFLINE');
         this.stopHeartbeat();
+        this.clearPendingRequests('Conexão encerrada pelo agente.');
         this.scheduleReconnect();
       };
     } catch {
-      this.setState('AGENT_OFFLINE');
+      this.setState('AGENT_ERROR');
       this.scheduleReconnect();
     }
   }
@@ -121,31 +131,40 @@ class AgentBridgeService {
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
+    this.clearPendingRequests('Desconexão solicitada pelo usuário.');
+
     if (this.socket) {
+      this.socket.onclose = null;
+      this.socket.onerror = null;
       this.socket.close();
       this.socket = null;
     }
     this.setState('AGENT_OFFLINE');
   }
 
+  /**
+   * 2. Realizar Handshake
+   */
   private sendHandshake() {
     this.sendMessage({
-      version: this.PROTOCOL_VERSION,
+      protocol_version: this.PROTOCOL_VERSION,
       type: 'HANDSHAKE',
-      token: this.localToken,
-      client: 'DYARTE_REACT_UI',
-      timestamp: Date.now(),
+      client: 'DYARTE_OPTIMIZER',
     });
   }
 
+  /**
+   * 4. Enviar PING
+   */
   private startHeartbeat() {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
       if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+        this.lastPingTimestamp = Date.now();
         this.sendMessage({
-          version: this.PROTOCOL_VERSION,
+          protocol_version: this.PROTOCOL_VERSION,
           type: 'PING',
-          timestamp: Date.now(),
+          timestamp: this.lastPingTimestamp,
         });
       }
     }, 5000);
@@ -172,9 +191,99 @@ class AgentBridgeService {
     }
   }
 
+  /**
+   * 6. Executar TEST_CONNECTION
+   */
+  public async testConnection(customRequestId?: string, timeoutMs: number = 5000): Promise<{
+    success: boolean;
+    agent_version?: string;
+    request_id?: string;
+    error?: string;
+  }> {
+    if (this.connectionState !== 'AGENT_ONLINE' || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return {
+        success: false,
+        error: 'Agente offline. Inicie o dyarte-agent.exe em 127.0.0.1:49152 para conectar.',
+      };
+    }
+
+    const requestId =
+      customRequestId || `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        resolve({
+          success: false,
+          error: 'Tempo limite esgotado aguardando TEST_CONNECTION_RESULT do agente.',
+        });
+      }, timeoutMs);
+
+      this.pendingRequests.set(requestId, {
+        resolve: (resp) => {
+          clearTimeout(timer);
+          if (resp.type === 'TEST_CONNECTION_RESULT') {
+            resolve({
+              success: Boolean(resp.success),
+              agent_version: resp.agent_version || '1.0.0',
+              request_id: resp.request_id,
+            });
+          } else {
+            resolve({
+              success: false,
+              error: resp.error || 'Resposta inesperada do agente.',
+            });
+          }
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          resolve({ success: false, error: err.message });
+        },
+        timer,
+      });
+
+      this.sendMessage({
+        protocol_version: this.PROTOCOL_VERSION,
+        request_id: requestId,
+        type: 'TEST_CONNECTION',
+      });
+    });
+  }
+
+  /**
+   * Processamento das mensagens recebidas do Agente Windows
+   */
   private handleIncomingMessage(msg: any) {
     if (!msg || typeof msg !== 'object') return;
 
+    // 3. Receber HANDSHAKE_ACK
+    if (msg.type === 'HANDSHAKE_ACK') {
+      if (msg.status === 'ONLINE') {
+        this.setState('AGENT_ONLINE');
+        this.startHeartbeat();
+      }
+      return;
+    }
+
+    // 5. Receber PONG
+    if (msg.type === 'PONG') {
+      if (this.lastPingTimestamp > 0) {
+        this.lastLatencyMs = Math.max(1, Date.now() - this.lastPingTimestamp);
+      }
+      return;
+    }
+
+    // 5 & 6. Request ID correlation (e.g. TEST_CONNECTION_RESULT)
+    if (msg.request_id && this.pendingRequests.has(msg.request_id)) {
+      const pending = this.pendingRequests.get(msg.request_id);
+      this.pendingRequests.delete(msg.request_id);
+      if (pending) {
+        pending.resolve(msg);
+      }
+      return;
+    }
+
+    // Telemetria futura enviada pelo agente
     if (msg.type === 'TELEMETRY_SNAPSHOT' && msg.data) {
       const snapshot: TelemetrySnapshot = {
         version: msg.version || this.PROTOCOL_VERSION,
@@ -217,17 +326,32 @@ class AgentBridgeService {
     }
   }
 
+  private clearPendingRequests(reason: string) {
+    this.pendingRequests.forEach((req) => {
+      clearTimeout(req.timer);
+      req.reject(new Error(reason));
+    });
+    this.pendingRequests.clear();
+  }
+
   /**
-   * Solicita aplicação de otimização estritamente por ID conhecido
+   * Solicita aplicação de otimização por ID
    */
-  public async requestApplyOptimization(toolId: string): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+  public async requestApplyOptimization(
+    toolId: string
+  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
     if (this.connectionState !== 'AGENT_ONLINE') {
-      return { success: false, state: 'FALHA', error: 'DYARTE Agent não conectado no Windows (127.0.0.1:49152).' };
+      return {
+        success: false,
+        state: 'FALHA',
+        error: 'DYARTE Agent não conectado no Windows (127.0.0.1:49152).',
+      };
     }
 
-    // Emissão de comando tipado na whitelist
+    const requestId = `opt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     this.sendMessage({
-      version: this.PROTOCOL_VERSION,
+      protocol_version: this.PROTOCOL_VERSION,
+      request_id: requestId,
       type: 'APPLY_OPTIMIZATION',
       tool_id: toolId,
       timestamp: Date.now(),
@@ -237,15 +361,19 @@ class AgentBridgeService {
   }
 
   /**
-   * Solicita rollback específico para o estado anterior registrado pelo agente
+   * Solicita rollback específico
    */
-  public async requestRollbackOptimization(toolId: string): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+  public async requestRollbackOptimization(
+    toolId: string
+  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
     if (this.connectionState !== 'AGENT_ONLINE') {
       return { success: false, state: 'FALHA', error: 'DYARTE Agent offline.' };
     }
 
+    const requestId = `rbk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     this.sendMessage({
-      version: this.PROTOCOL_VERSION,
+      protocol_version: this.PROTOCOL_VERSION,
+      request_id: requestId,
       type: 'ROLLBACK_OPTIMIZATION',
       tool_id: toolId,
       timestamp: Date.now(),

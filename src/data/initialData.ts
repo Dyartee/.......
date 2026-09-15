@@ -332,14 +332,14 @@ export const INITIAL_DEVICE: DeviceInfo = {
   windows_version: '23H2 (x64)',
   build: 'Build 22631.3880',
   device_id: 'DYARTE-PC-DESKTOP-9F4A',
-  is_agent_connected: true,
-  agent_version: '1.4.2-win-x64',
-  last_heartbeat: 'Há 4 segundos',
-  cpu_usage_pct: 42,
-  gpu_usage_pct: 31,
-  ram_usage_pct: 67,
-  temp_c: 48,
-  ping_ms: 14,
+  is_agent_connected: false,
+  agent_version: '1.0.0',
+  last_heartbeat: 'Desconectado',
+  cpu_usage_pct: 0,
+  gpu_usage_pct: 0,
+  ram_usage_pct: 0,
+  temp_c: 0,
+  ping_ms: 0,
 };
 
 export const INITIAL_CONFIG: AppConfig = {

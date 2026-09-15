@@ -545,6 +545,56 @@ app.post('/api/admin/user/status', requireAuth, requireAdmin, async (req: Authen
   }
 });
 
+// Delete User Account (Admin Only)
+app.delete('/api/admin/user/:userId', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) {
+      return res.status(400).json({ error: 'ID do usuário é obrigatório.' });
+    }
+
+    // Safety check: protect master admin from deletion
+    const userDocRef = adminDb.collection('users').doc(userId);
+    const userSnap = await userDocRef.get();
+    if (userSnap.exists) {
+      const data = userSnap.data();
+      if (data?.email?.toLowerCase() === 'kelberduarte22@gmail.com') {
+        return res.status(403).json({ error: 'Não é permitido excluir o usuário Administrador Master.' });
+      }
+    }
+
+    // Delete Firestore user document
+    await userDocRef.delete();
+
+    // Revoke or delete any user licenses
+    const licSnap = await adminDb.collection('licenses').where('user_id', '==', userId).get();
+    const batch = adminDb.batch();
+    licSnap.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+    });
+    await batch.commit();
+
+    // Try deleting from Firebase Auth if exists
+    try {
+      await adminAuth.deleteUser(userId);
+    } catch {
+      // Ignored if user was not in Firebase Auth
+    }
+
+    await recordAdminLog(
+      'DELETE_USER',
+      req.user!.email || 'admin',
+      userId,
+      `Conta de usuário excluída permanentemente.`
+    );
+
+    res.json({ success: true, message: 'Conta excluída com sucesso.' });
+  } catch (error) {
+    console.error('Erro ao excluir usuário:', error);
+    res.status(500).json({ error: 'Falha interna ao remover usuário.' });
+  }
+});
+
 // Admin License Operations (Create, Suspend, Reactivate, Revoke)
 app.post('/api/admin/license/action', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
