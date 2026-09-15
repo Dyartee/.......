@@ -100,7 +100,7 @@ export const WindowHeader: React.FC = () => {
         {/* Language Dropdown in Header */}
         <LanguageSwitcher className="hidden sm:flex" />
 
-        {currentUser && (
+        {currentUser && (currentUser.email.toLowerCase() === 'kelberduarte22@gmail.com' || currentUser.role === 'ADMIN') && (
           <div className="flex items-center gap-1.5 mr-2">
             <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-mono hidden sm:inline-block">
               Simulador:
@@ -112,7 +112,7 @@ export const WindowHeader: React.FC = () => {
                   ? 'bg-amber-500/10 border-amber-500/40 text-amber-300 hover:bg-amber-500/20'
                   : 'bg-[#181820] border-[#2c2c38] text-zinc-300 hover:text-white hover:border-[#E00000]/60'
               }`}
-              title="Alternar entre perfil de Usuário e perfil de Administrador"
+              title="Alternar entre perfil de Usuário e perfil de Administrador (Restrito ao Administrador Mestre)"
             >
               {currentUser.role === 'ADMIN' ? (
                 <>

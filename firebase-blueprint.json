@@ -1,0 +1,153 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with plan authorization and device linkage",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "nome": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["USER", "ADMIN"] },
+        "nivel_plano": { "type": "number" },
+        "plano_atual": { "type": "string" },
+        "status_plano": { "type": "string", "enum": ["ATIVO", "EXPIRADO", "SEM_PLANO", "CANCELADO"] },
+        "data_inicio": { "type": "string" },
+        "data_expiracao": { "type": "string" },
+        "license_id": { "type": "string" },
+        "status_licenca": { "type": "string", "enum": ["ATIVA", "PENDENTE", "EXPIRADA", "SUSPENSA", "CANCELADA"] },
+        "device_id": { "type": "string" },
+        "ultimo_login": { "type": "string" },
+        "status": { "type": "string", "enum": ["ATIVO", "BLOQUEADO", "PENDENTE"] },
+        "data_criacao": { "type": "string" }
+      },
+      "required": ["user_id", "email", "role", "nivel_plano", "status_plano"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized administrators whitelist document",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "QUEUED"] },
+        "granted_at": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["email", "role", "status"]
+    },
+    "License": {
+      "title": "License",
+      "description": "Cryptographic software license assigned to a user and device",
+      "type": "object",
+      "properties": {
+        "license_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "plan_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["ATIVA", "PENDENTE", "EXPIRADA", "SUSPENSA", "CANCELADA"] },
+        "created_at": { "type": "string" },
+        "activated_at": { "type": "string" },
+        "expires_at": { "type": "string" },
+        "device_id": { "type": "string" },
+        "last_seen": { "type": "string" },
+        "app_version": { "type": "string" }
+      },
+      "required": ["license_id", "user_id", "plan_id", "status", "created_at", "expires_at"]
+    },
+    "Device": {
+      "title": "Device",
+      "description": "Hardware telemetry fingerprint tied to authorized desktop instances",
+      "type": "object",
+      "properties": {
+        "device_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "cpu": { "type": "string" },
+        "gpu": { "type": "string" },
+        "ram": { "type": "string" },
+        "storage": { "type": "string" },
+        "windows": { "type": "string" },
+        "windows_version": { "type": "string" },
+        "build": { "type": "string" },
+        "last_seen": { "type": "string" },
+        "is_agent_connected": { "type": "boolean" },
+        "agent_version": { "type": "string" }
+      },
+      "required": ["device_id", "user_id"]
+    },
+    "OptimizationHistory": {
+      "title": "OptimizationHistory",
+      "description": "Audit record of system and GPU optimizations applied to the OS",
+      "type": "object",
+      "properties": {
+        "history_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "tool_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "category": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["SUCESSO", "FALHA", "REVERTIDO"] },
+        "result": { "type": "string" },
+        "duration_ms": { "type": "number" },
+        "details": { "type": "string" }
+      },
+      "required": ["history_id", "user_id", "tool_id", "status", "date"]
+    },
+    "AdminLog": {
+      "title": "AdminLog",
+      "description": "Administrative actions audit trail",
+      "type": "object",
+      "properties": {
+        "log_id": { "type": "string" },
+        "action": { "type": "string" },
+        "user_email": { "type": "string" },
+        "target": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["log_id", "action", "user_email", "timestamp"]
+    },
+    "AppConfig": {
+      "title": "AppConfig",
+      "description": "Application configuration settings",
+      "type": "object",
+      "properties": {
+        "support_email": { "type": "string" },
+        "discord_url": { "type": "string" },
+        "app_version": { "type": "string" },
+        "require_agent_connection": { "type": "boolean" },
+        "safety_lock_enabled": { "type": "boolean" }
+      },
+      "required": ["support_email", "app_version"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and authorization status"
+    },
+    "/admins/{adminId}": {
+      "schema": "Admin",
+      "description": "Administrative roles whitelist"
+    },
+    "/licenses/{licenseId}": {
+      "schema": "License",
+      "description": "Software license activations"
+    },
+    "/devices/{deviceId}": {
+      "schema": "Device",
+      "description": "Desktop hardware fingerprints"
+    },
+    "/optimization_history/{historyId}": {
+      "schema": "OptimizationHistory",
+      "description": "Optimization logs per user"
+    },
+    "/admin_logs/{logId}": {
+      "schema": "AdminLog",
+      "description": "Admin operational audit trail"
+    },
+    "/config/global": {
+      "schema": "AppConfig",
+      "description": "Global application configuration"
+    }
+  }
+}

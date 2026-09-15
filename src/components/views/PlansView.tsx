@@ -64,8 +64,8 @@ export const PlansView: React.FC = () => {
         </p>
       </div>
 
-      {/* 4 Cards Desktop Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 items-stretch">
+      {/* 3 Cards Desktop Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch max-w-5xl mx-auto">
         {plans.map((plan) => {
           const userPlanLevel = currentUser?.nivel_plano ?? 0;
           const isCurrentPlan =
@@ -225,72 +225,73 @@ export const PlansView: React.FC = () => {
         })}
       </div>
 
-      {/* Architecture & Webhook Live Simulation Card */}
-      <div className="p-6 rounded-2xl bg-[#101017] border border-[#242435] space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[#FF4444]" />
-              <h3 className="text-sm font-bold text-white font-mono uppercase">
-                {t('plans_webhook_title')}
-              </h3>
+      {/* Architecture & Webhook Live Simulation Card - Visible exclusively to Administrator */}
+      {currentUser?.role === 'ADMIN' && (
+        <div className="p-6 rounded-2xl bg-[#101017] border border-amber-500/30 space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <h3 className="text-sm font-bold text-white font-mono uppercase">
+                  {t('plans_webhook_title')} <span className="text-amber-400 text-xs font-mono ml-2">[PAINEL ADMINISTRATIVO]</span>
+                </h3>
+              </div>
+              <p className="text-xs text-zinc-400 mt-1 max-w-2xl">
+                Ambiente de teste e simulação de ativação de licenças via webhook oficial DYARTE. Restrito ao administrador.
+              </p>
             </div>
-            <p className="text-xs text-zinc-400 mt-1 max-w-2xl">
-              {t('plans_webhook_desc')}
-            </p>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={selectedPlanForSim}
+                onChange={(e) => setSelectedPlanForSim(e.target.value as PlanId)}
+                className="px-3 py-2 rounded-lg bg-[#09090d] border border-zinc-700 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
+              >
+                <option value="medio">{t('plan_name_medio')} (R$ 30,00)</option>
+                <option value="avancado">{t('plan_name_avancado')} (R$ 45,00)</option>
+                <option value="completo">{t('plan_name_completo')} (R$ 60,00)</option>
+              </select>
+
+              <button
+                onClick={() => handleSimulateWebhook(selectedPlanForSim)}
+                disabled={isSimulatingPayment}
+                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-md disabled:opacity-50"
+              >
+                {isSimulatingPayment ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>{t('plans_syncing')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>Testar Ativação</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={selectedPlanForSim}
-              onChange={(e) => setSelectedPlanForSim(e.target.value as PlanId)}
-              className="px-3 py-2 rounded-lg bg-[#09090d] border border-zinc-700 text-xs font-mono text-white focus:outline-none focus:border-[#E00000]"
-            >
-              <option value="basico">{t('plan_name_basico')} (R$ 20,00)</option>
-              <option value="medio">{t('plan_name_medio')} (R$ 30,00)</option>
-              <option value="avancado">{t('plan_name_avancado')} (R$ 45,00)</option>
-              <option value="completo">{t('plan_name_completo')} (R$ 60,00)</option>
-            </select>
-
-            <button
-              onClick={() => handleSimulateWebhook(selectedPlanForSim)}
-              disabled={isSimulatingPayment}
-              className="px-4 py-2 rounded-lg bg-[#E00000] hover:bg-[#c50000] text-white text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-md disabled:opacity-50"
-            >
-              {isSimulatingPayment ? (
-                <>
-                  <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>{t('plans_syncing')}</span>
-                </>
-              ) : (
-                <>
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>{t('plans_simulate_btn')}</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Visual Architecture Flow Diagram */}
-        <div className="p-4 rounded-xl bg-[#09090d] border border-zinc-800/80 font-mono text-[11px] text-zinc-400 overflow-x-auto">
-          <div className="flex items-center gap-2 text-zinc-300 min-w-[600px]">
-            <span className="text-white font-bold">{t('plans_flow_client')}</span>
-            <span>→</span>
-            <span className="text-zinc-400">{t('plans_flow_choose')}</span>
-            <span>→</span>
-            <span className="text-rose-400">{t('plans_flow_checkout')}</span>
-            <span>→</span>
-            <span className="text-emerald-400 font-bold">{t('plans_flow_approved')}</span>
-            <span>→</span>
-            <span className="text-amber-400 font-bold">{t('plans_flow_sync')}</span>
-            <span>→</span>
-            <span className="text-[#FF4444] font-bold">{t('plans_flow_updated')}</span>
-            <span>→</span>
-            <span className="text-white font-bold">{t('plans_flow_unlocked')}</span>
+          {/* Visual Architecture Flow Diagram */}
+          <div className="p-4 rounded-xl bg-[#09090d] border border-zinc-800/80 font-mono text-[11px] text-zinc-400 overflow-x-auto">
+            <div className="flex items-center gap-2 text-zinc-300 min-w-[600px]">
+              <span className="text-white font-bold">{t('plans_flow_client')}</span>
+              <span>→</span>
+              <span className="text-zinc-400">{t('plans_flow_choose')}</span>
+              <span>→</span>
+              <span className="text-rose-400">{t('plans_flow_checkout')}</span>
+              <span>→</span>
+              <span className="text-emerald-400 font-bold">{t('plans_flow_approved')}</span>
+              <span>→</span>
+              <span className="text-amber-400 font-bold">{t('plans_flow_sync')}</span>
+              <span>→</span>
+              <span className="text-[#FF4444] font-bold">{t('plans_flow_updated')}</span>
+              <span>→</span>
+              <span className="text-white font-bold">{t('plans_flow_unlocked')}</span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

@@ -24,12 +24,14 @@ export const ProfileView: React.FC = () => {
     logout,
     openLegalModal,
     addToast,
+    changePassword,
   } = useApp();
 
   const [nome, setNome] = useState(currentUser?.nome || '');
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
+  const [isChangingPass, setIsChangingPass] = useState(false);
 
   const handleUpdateName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,10 +40,10 @@ export const ProfileView: React.FC = () => {
     updateCurrentUserProfile({ nome: safeNome });
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentPass || !newPass) {
-      addToast('error', 'Campos Obrigatórios', 'Preencha a senha atual e a nova senha.');
+    if (!newPass) {
+      addToast('error', 'Campos Obrigatórios', 'Preencha a nova senha.');
       return;
     }
     if (newPass !== confirmPass) {
@@ -53,10 +55,18 @@ export const ProfileView: React.FC = () => {
       return;
     }
 
-    setCurrentPass('');
-    setNewPass('');
-    setConfirmPass('');
-    addToast('success', 'Senha Atualizada', 'Sua senha foi redefinida com criptografia segura.');
+    setIsChangingPass(true);
+    const res = await changePassword(newPass);
+    setIsChangingPass(false);
+
+    if (res.success) {
+      setCurrentPass('');
+      setNewPass('');
+      setConfirmPass('');
+      addToast('success', 'Senha Atualizada', 'Sua senha foi redefinida no Firebase com criptografia segura.');
+    } else {
+      addToast('error', 'Erro ao Atualizar Senha', res.error || 'Não foi possível alterar a senha.');
+    }
   };
 
   return (

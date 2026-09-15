@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email != null && request.auth.token.email.lower() == 'kelberduarte22@gmail.com')
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && (
+        (isOwner(userId) && request.resource.data.role == 'USER' && request.resource.data.nivel_plano <= 3) ||
+        isAdmin()
+      );
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'nivel_plano', 'status_plano', 'license_id', 'status_licenca', 'status'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Admin Whitelist
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Licenses Collection
+    match /licenses/{licenseId} {
+      allow get: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Devices Collection
+    match /devices/{deviceId} {
+      allow get: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow create, update: if isSignedIn() && (request.resource.data.user_id == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Optimization History
+    match /optimization_history/{historyId} {
+      allow get: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.user_id == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // Admin Logs
+    match /admin_logs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    // App Configuration
+    match /config/{configId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -635,25 +635,6 @@ export const OptimizationView: React.FC = () => {
                             </p>
                           </div>
 
-                          {/* Link de Drive configurado no Admin se for Driver Optimizer */}
-                          {isDriverOptimizer && driveUrl && (
-                            <div className="p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 flex items-center justify-between gap-2 text-xs font-mono">
-                              <div className="flex items-center gap-2 text-zinc-300 truncate">
-                                <Download className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                                <span className="truncate">Pacote Nuvem: {driveUrl}</span>
-                              </div>
-                              <a
-                                href={driveUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-[10px] font-mono flex items-center gap-1 shrink-0 transition-colors"
-                              >
-                                <span>Abrir</span>
-                                <ExternalLink className="w-2.5 h-2.5" />
-                              </a>
-                            </div>
-                          )}
-
                           <div className="p-3 rounded-lg bg-[#0c0c10] border border-zinc-800/80 text-[11px] font-mono text-zinc-400">
                             <span className="text-white font-semibold block mb-0.5">Ações aplicadas:</span>
                             <span>{tool.details}</span>

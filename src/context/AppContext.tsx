@@ -24,6 +24,17 @@ import {
 } from '../data/initialData';
 import { detectFullComputerSpecs } from '../utils/hardwareDetection';
 import { LanguageCode, translations } from '../i18n/translations';
+import { auth, db, googleAuthProvider } from '../lib/firebase';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  updatePassword,
+  signInWithPopup,
+  onAuthStateChanged,
+} from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 export type NavView =
   | 'dashboard'
@@ -77,7 +88,9 @@ interface AppContextType {
   // Auth & User
   currentUser: User | null;
   users: User[];
-  login: (email: string, pass: string) => { success: boolean; error?: string };
+  login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
+  changePassword: (newPass: string) => Promise<{ success: boolean; error?: string }>;
   register: (
     dataOrName:
       | {
@@ -92,11 +105,11 @@ interface AppContextType {
     email?: string,
     senha?: string,
     confirmacao?: string
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   switchUserRole: (role: 'USER' | 'ADMIN') => void;
   updateCurrentUserProfile: (updates: Partial<User>) => void;
-  requestPasswordReset: (email: string) => { success: boolean; message: string };
+  requestPasswordReset: (email: string) => Promise<{ success: boolean; message: string }>;
 
   // Data
   plans: Plan[];
@@ -224,7 +237,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [plans, setPlans] = useState<Plan[]>(() => {
     const saved = localStorage.getItem('dyarte_plans');
-    return saved ? JSON.parse(saved) : INITIAL_PLANS;
+    const loaded: Plan[] = saved ? JSON.parse(saved) : INITIAL_PLANS;
+    return loaded.filter((p) => p.id !== 'basico');
   });
 
   const [tools, setTools] = useState<Tool[]>(() => {
@@ -944,38 +958,173 @@ pause
     return { success: false, error: 'Nenhuma sessão do site encontrada no navegador.' };
   };
 
+  // Firebase Auth Real-Time State Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser && fbUser.email) {
+        const emailLower = fbUser.email.toLowerCase();
+        const isAdminEmail = emailLower === 'kelberduarte22@gmail.com';
+
+        try {
+          const userRef = doc(db, 'users', fbUser.uid);
+          const snap = await getDoc(userRef);
+
+          if (snap.exists()) {
+            const userData = snap.data() as User;
+            if (isAdminEmail && userData.role !== 'ADMIN') {
+              const promoted: User = {
+                ...userData,
+                role: 'ADMIN',
+                plano_atual: 'COMPLETO',
+                nivel_plano: 4,
+                status_plano: 'ATIVO',
+              };
+              await setDoc(userRef, promoted, { merge: true });
+              setCurrentUser(promoted);
+            } else {
+              setCurrentUser(userData);
+            }
+          } else {
+            // New user registration profile initialization
+            const newUser: User = {
+              user_id: fbUser.uid,
+              nome: fbUser.displayName || (isAdminEmail ? 'Kelber Duarte' : emailLower.split('@')[0]),
+              email: emailLower,
+              data_criacao: new Date().toISOString().split('T')[0],
+              plano_atual: isAdminEmail ? 'COMPLETO' : 'SEM PLANO',
+              nivel_plano: isAdminEmail ? 4 : 0,
+              status_plano: isAdminEmail ? 'ATIVO' : 'SEM_PLANO',
+              data_inicio: new Date().toISOString().split('T')[0],
+              data_expiracao: isAdminEmail ? '2030-12-31' : '-',
+              license_id: isAdminEmail ? 'lic_admin_duarte_master' : '',
+              status_licenca: isAdminEmail ? 'ATIVA' : 'PENDENTE',
+              device_id: device.device_id,
+              ultimo_login: 'Agora mesmo',
+              role: isAdminEmail ? 'ADMIN' : 'USER',
+              status: 'ATIVO',
+            };
+            await setDoc(userRef, newUser);
+
+            if (isAdminEmail) {
+              await setDoc(doc(db, 'admins', fbUser.uid), {
+                user_id: fbUser.uid,
+                email: emailLower,
+                role: 'ADMIN',
+                status: 'ACTIVE',
+                granted_at: new Date().toISOString(),
+                notes: 'Master administrator account initialized',
+              });
+            }
+            setCurrentUser(newUser);
+          }
+        } catch (e) {
+          console.warn('Firebase user sync note:', e);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [device.device_id]);
+
   // Auth Operations
-  const login = (email: string, pass: string) => {
+  const login = async (email: string, pass: string): Promise<{ success: boolean; error?: string }> => {
     const safeEmail = (email || '').trim().toLowerCase();
     const safePass = pass || '';
     if (!safeEmail || !safePass) {
       return { success: false, error: 'Preencha e-mail e senha.' };
     }
-    const targetUser = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
-    if (!targetUser) {
-      return { success: false, error: 'Conta não encontrada no site oficial dyarte.com. Verifique seu e-mail cadastrado.' };
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, safeEmail, safePass);
+      const fbUser = userCredential.user;
+      const isAdmin = safeEmail === 'kelberduarte22@gmail.com';
+
+      // Load Firestore profile
+      let userData: User;
+      try {
+        const userRef = doc(db, 'users', fbUser.uid);
+        const snap = await getDoc(userRef);
+        if (snap.exists()) {
+          userData = snap.data() as User;
+          if (isAdmin && userData.role !== 'ADMIN') {
+            userData = { ...userData, role: 'ADMIN', plano_atual: 'COMPLETO', nivel_plano: 4 };
+            await setDoc(userRef, userData, { merge: true });
+          }
+        } else {
+          userData = {
+            user_id: fbUser.uid,
+            nome: fbUser.displayName || (isAdmin ? 'Kelber Duarte' : safeEmail.split('@')[0]),
+            email: safeEmail,
+            data_criacao: new Date().toISOString().split('T')[0],
+            plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
+            nivel_plano: isAdmin ? 4 : 0,
+            status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+            data_inicio: new Date().toISOString().split('T')[0],
+            data_expiracao: isAdmin ? '2030-12-31' : '-',
+            license_id: isAdmin ? 'lic_admin_duarte_master' : '',
+            status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+            device_id: device.device_id,
+            ultimo_login: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+            role: isAdmin ? 'ADMIN' : 'USER',
+            status: 'ATIVO',
+          };
+          await setDoc(userRef, userData);
+        }
+      } catch (err) {
+        // Fallback user representation if offline
+        userData = {
+          user_id: fbUser.uid,
+          nome: isAdmin ? 'Kelber Duarte' : safeEmail.split('@')[0],
+          email: safeEmail,
+          data_criacao: new Date().toISOString().split('T')[0],
+          plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
+          nivel_plano: isAdmin ? 4 : 0,
+          status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+          data_inicio: new Date().toISOString().split('T')[0],
+          data_expiracao: isAdmin ? '2030-12-31' : '-',
+          license_id: isAdmin ? 'lic_admin_duarte_master' : '',
+          status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+          device_id: device.device_id,
+          ultimo_login: 'Agora mesmo',
+          role: isAdmin ? 'ADMIN' : 'USER',
+          status: 'ATIVO',
+        };
+      }
+
+      setCurrentUser(userData);
+      addToast(
+        'success',
+        'Autenticação Segura Concluída',
+        isAdmin ? 'Bem-vindo, Administrador Duarte! Acesso total concedido.' : `Bem-vindo de volta, ${userData.nome}!`
+      );
+      return { success: true };
+    } catch (err: any) {
+      // Fallback for local initial accounts if needed
+      const targetUser = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
+      if (targetUser) {
+        if (targetUser.status === 'BLOQUEADO') {
+          return { success: false, error: 'Esta conta foi suspensa pela administração.' };
+        }
+        setCurrentUser(targetUser);
+        addToast('success', 'Sessão Iniciada', `Bem-vindo, ${targetUser.nome}!`);
+        return { success: true };
+      }
+
+      let errMsg = 'Credenciais inválidas. Verifique seu e-mail e senha.';
+      if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
+        errMsg = 'E-mail ou senha incorretos.';
+      } else if (err.code === 'auth/user-not-found') {
+        errMsg = 'Conta não cadastrada. Crie uma nova conta com facilidade.';
+      } else if (err.code === 'auth/too-many-requests') {
+        errMsg = 'Muitas tentativas malsucedidas. Tente novamente em instantes.';
+      } else if (err.message) {
+        errMsg = err.message;
+      }
+      return { success: false, error: errMsg };
     }
-    if (targetUser.status === 'BLOQUEADO') {
-      return { success: false, error: 'Esta conta foi suspensa pela administração.' };
-    }
-
-    const now = new Date();
-    const timeStr = `Hoje às ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    setLastWebSync(timeStr);
-    localStorage.setItem('dyarte_last_sync', timeStr);
-
-    const updatedUser: User = {
-      ...targetUser,
-      ultimo_login: `Sincronizado ${timeStr}`,
-    };
-
-    setUsers((prev) => prev.map((u) => (u.user_id === targetUser.user_id ? updatedUser : u)));
-    setCurrentUser(updatedUser);
-    addToast('success', 'Sincronização com o Site Concluída', `Bem-vindo, ${updatedUser.nome}! Sua conta e planos foram carregados.`);
-    return { success: true };
   };
 
-  const register = (
+  const register = async (
     dataOrName:
       | {
           nome: string;
@@ -989,7 +1138,7 @@ pause
     emailArg?: string,
     senhaArg?: string,
     confirmacaoArg?: string
-  ) => {
+  ): Promise<{ success: boolean; error?: string }> => {
     let rawNome = '';
     let rawEmail = '';
     let rawSenha = '';
@@ -1026,55 +1175,163 @@ pause
     if (!termos || !privacidade) {
       return { success: false, error: 'Você deve aceitar os Termos de Uso e a Política de Privacidade.' };
     }
-    const existing = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
-    if (existing) {
-      return { success: false, error: 'Já existe uma conta cadastrada com este e-mail.' };
+
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, safeEmail, rawSenha);
+      const fbUser = cred.user;
+      const isAdmin = safeEmail === 'kelberduarte22@gmail.com';
+
+      const newUser: User = {
+        user_id: fbUser.uid,
+        nome: safeNome,
+        email: safeEmail,
+        data_criacao: new Date().toISOString().split('T')[0],
+        plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
+        nivel_plano: isAdmin ? 4 : 0,
+        status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+        data_inicio: new Date().toISOString().split('T')[0],
+        data_expiracao: isAdmin ? '2030-12-31' : '-',
+        license_id: isAdmin ? 'lic_admin_duarte_master' : '',
+        status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+        device_id: device.device_id,
+        ultimo_login: 'Agora mesmo',
+        role: isAdmin ? 'ADMIN' : 'USER',
+        status: 'ATIVO',
+      };
+
+      try {
+        await setDoc(doc(db, 'users', fbUser.uid), newUser);
+        if (isAdmin) {
+          await setDoc(doc(db, 'admins', fbUser.uid), {
+            user_id: fbUser.uid,
+            email: safeEmail,
+            role: 'ADMIN',
+            status: 'ACTIVE',
+            granted_at: new Date().toISOString(),
+            notes: 'Master administrator account registered',
+          });
+        }
+      } catch (dbErr) {
+        console.warn('Firestore write warning:', dbErr);
+      }
+
+      setUsers((prev) => [...prev, newUser]);
+      setCurrentUser(newUser);
+
+      addToast(
+        'success',
+        'Conta Criada com Criptografia Segura!',
+        isAdmin
+          ? 'Conta Master criada e vinculada como Administrador do sistema!'
+          : 'Conta criada! Você pode explorar todas as funções técnicas. Adquira um plano para executar no Windows.'
+      );
+      return { success: true };
+    } catch (err: any) {
+      let errMsg = 'Falha ao criar conta.';
+      if (err.code === 'auth/email-already-in-use') {
+        errMsg = 'Já existe uma conta cadastrada com este e-mail.';
+      } else if (err.code === 'auth/weak-password') {
+        errMsg = 'A senha informada é fraca. Use pelo menos 6 caracteres.';
+      } else if (err.message) {
+        errMsg = err.message;
+      }
+      return { success: false, error: errMsg };
     }
-
-    const newId = `usr_${Date.now()}`;
-
-    const newUser: User = {
-      user_id: newId,
-      nome: safeNome,
-      email: safeEmail,
-      data_criacao: new Date().toISOString().split('T')[0],
-      plano_atual: 'SEM PLANO',
-      nivel_plano: 0,
-      status_plano: 'SEM_PLANO',
-      data_inicio: '-',
-      data_expiracao: '-',
-      license_id: '',
-      status_licenca: 'PENDENTE',
-      device_id: device.device_id,
-      ultimo_login: 'Agora mesmo',
-      role: 'USER',
-      status: 'ATIVO',
-    };
-
-    setUsers((prev) => [...prev, newUser]);
-    setCurrentUser(newUser);
-
-    addToast(
-      'success',
-      'Conta Criada no Modo de Visualização!',
-      'Você pode explorar todas as funções e especificações técnicas. Adquira um plano para executar as otimizações.'
-    );
-    return { success: true };
   };
 
-  const logout = () => {
+  const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const cred = await signInWithPopup(auth, googleAuthProvider);
+      const fbUser = cred.user;
+      const emailLower = (fbUser.email || '').toLowerCase();
+      const isAdmin = emailLower === 'kelberduarte22@gmail.com';
+
+      const userRef = doc(db, 'users', fbUser.uid);
+      const snap = await getDoc(userRef);
+      let userData: User;
+
+      if (snap.exists()) {
+        userData = snap.data() as User;
+        if (isAdmin && userData.role !== 'ADMIN') {
+          userData = { ...userData, role: 'ADMIN', plano_atual: 'COMPLETO', nivel_plano: 4 };
+          await setDoc(userRef, userData, { merge: true });
+        }
+      } else {
+        userData = {
+          user_id: fbUser.uid,
+          nome: fbUser.displayName || (isAdmin ? 'Kelber Duarte' : emailLower.split('@')[0]),
+          email: emailLower,
+          data_criacao: new Date().toISOString().split('T')[0],
+          plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
+          nivel_plano: isAdmin ? 4 : 0,
+          status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+          data_inicio: new Date().toISOString().split('T')[0],
+          data_expiracao: isAdmin ? '2030-12-31' : '-',
+          license_id: isAdmin ? 'lic_admin_duarte_master' : '',
+          status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+          device_id: device.device_id,
+          ultimo_login: 'Agora mesmo',
+          role: isAdmin ? 'ADMIN' : 'USER',
+          status: 'ATIVO',
+        };
+        await setDoc(userRef, userData);
+        if (isAdmin) {
+          await setDoc(doc(db, 'admins', fbUser.uid), {
+            user_id: fbUser.uid,
+            email: emailLower,
+            role: 'ADMIN',
+            status: 'ACTIVE',
+            granted_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      setCurrentUser(userData);
+      addToast('success', 'Autenticado com Google', `Bem-vindo, ${userData.nome}!`);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Falha ao autenticar com Google.' };
+    }
+  };
+
+  const changePassword = async (newPass: string): Promise<{ success: boolean; error?: string }> => {
+    if (!auth.currentUser) {
+      return { success: false, error: 'Nenhum usuário autenticado no sistema.' };
+    }
+    if (!newPass || newPass.length < 6) {
+      return { success: false, error: 'A nova senha deve ter no mínimo 6 caracteres.' };
+    }
+    try {
+      await updatePassword(auth.currentUser, newPass);
+      return { success: true };
+    } catch (err: any) {
+      let msg = err.message || 'Erro ao alterar a senha.';
+      if (err.code === 'auth/requires-recent-login') {
+        msg = 'Por segurança, faça login novamente antes de alterar sua senha.';
+      }
+      return { success: false, error: msg };
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      // ignore
+    }
     setCurrentUser(null);
     setCurrentView('dashboard');
-    addToast('info', 'Sessão Encerrada', 'Você saiu da sua conta.');
+    addToast('info', 'Sessão Encerrada', 'Você saiu da sua conta com segurança.');
   };
 
   const switchUserRole = (role: 'USER' | 'ADMIN') => {
+    // Only kelberduarte22@gmail.com or authorized admin can toggle simulator mode
     if (role === 'ADMIN') {
-      const adminAcc = users.find((u) => u.role === 'ADMIN') || INITIAL_USERS[1];
+      const adminAcc = users.find((u) => u.email.toLowerCase() === 'kelberduarte22@gmail.com') || INITIAL_USERS[0];
       setCurrentUser(adminAcc);
-      addToast('info', 'Modo Administrador Ativado', 'Você está navegando com privilégios de Administrador.');
+      addToast('info', 'Modo Administrador Ativado', 'Você está navegando com privilégios de Administrador Master.');
     } else {
-      const userAcc = users.find((u) => u.role === 'USER') || INITIAL_USERS[0];
+      const userAcc = users.find((u) => u.role === 'USER') || INITIAL_USERS[2];
       setCurrentUser(userAcc);
       addToast('info', 'Modo Usuário Ativado', `Você está navegando como ${userAcc.nome}.`);
     }
@@ -1088,16 +1345,23 @@ pause
     addToast('success', 'Perfil Atualizado', 'Seus dados foram atualizados com sucesso.');
   };
 
-  const requestPasswordReset = (email: string) => {
+  const requestPasswordReset = async (email: string): Promise<{ success: boolean; message: string }> => {
     const safeEmail = (email || '').trim().toLowerCase();
-    const userFound = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
-    if (!userFound) {
-      return { success: false, message: 'E-mail não encontrado em nossa base.' };
+    if (!safeEmail) {
+      return { success: false, message: 'Informe o e-mail cadastrado.' };
     }
-    return {
-      success: true,
-      message: `Link de redefinição de senha enviado para ${safeEmail}. Verifique sua caixa de entrada.`,
-    };
+    try {
+      await sendPasswordResetEmail(auth, safeEmail);
+      return {
+        success: true,
+        message: `Link oficial de redefinição de senha enviado para ${safeEmail}. Verifique sua caixa de entrada.`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || 'Erro ao processar a recuperação de senha.',
+      };
+    }
   };
 
   // Device telemetry & Agent controls
@@ -1743,6 +2007,8 @@ pause
     currentUser,
     users,
     login,
+    loginWithGoogle,
+    changePassword,
     register,
     logout,
     switchUserRole,
@@ -1827,7 +2093,6 @@ export const getPlanNameByLevel = (level: PlanLevel): string => {
     case 0:
       return 'SEM PLANO (VISUALIZAÇÃO)';
     case 1:
-      return 'BÁSICO';
     case 2:
       return 'MÉDIO';
     case 3:
@@ -1835,6 +2100,6 @@ export const getPlanNameByLevel = (level: PlanLevel): string => {
     case 4:
       return 'COMPLETO';
     default:
-      return 'BÁSICO';
+      return 'MÉDIO';
   }
 };
