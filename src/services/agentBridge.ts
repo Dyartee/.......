@@ -79,6 +79,7 @@ class AgentBridgeService {
    * 1. Conectar ao dyarte-agent.exe em 127.0.0.1:49152
    */
   public connect() {
+    console.log('[AgentBridge] connect chamado');
     if (typeof window === 'undefined') return;
 
     // Evita abrir múltiplos sockets simultâneos
@@ -86,6 +87,7 @@ class AgentBridgeService {
       this.socket &&
       (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)
     ) {
+      console.log('[AgentBridge] Socket já ativo ou conectando (readyState:', this.socket.readyState, ')');
       return;
     }
 
@@ -93,9 +95,11 @@ class AgentBridgeService {
 
     try {
       const wsUrl = `ws://${this.AGENT_HOST}:${this.AGENT_PORT}`;
+      console.log('[AgentBridge] WebSocket CONNECTING para', wsUrl);
       this.socket = new WebSocket(wsUrl);
 
       this.socket.onopen = () => {
+        console.log('[AgentBridge] WebSocket OPEN');
         // Envia handshake inicial. Estado transita para ONLINE apenas após HANDSHAKE_ACK
         this.sendHandshake();
       };
@@ -109,23 +113,27 @@ class AgentBridgeService {
         }
       };
 
-      this.socket.onerror = () => {
+      this.socket.onerror = (err) => {
+        console.warn('[AgentBridge] WebSocket ERROR:', err);
         this.setState('AGENT_ERROR');
       };
 
-      this.socket.onclose = () => {
+      this.socket.onclose = (event) => {
+        console.log('[AgentBridge] WebSocket CLOSED (code:', event.code, 'reason:', event.reason, ')');
         this.setState('AGENT_OFFLINE');
         this.stopHeartbeat();
         this.clearPendingRequests('Conexão encerrada pelo agente.');
         this.scheduleReconnect();
       };
-    } catch {
+    } catch (err) {
+      console.error('[AgentBridge] Falha ao criar WebSocket:', err);
       this.setState('AGENT_ERROR');
       this.scheduleReconnect();
     }
   }
 
   public disconnect() {
+    console.log('[AgentBridge] disconnect chamado');
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -146,6 +154,7 @@ class AgentBridgeService {
    * 2. Realizar Handshake
    */
   private sendHandshake() {
+    console.log('[AgentBridge] HANDSHAKE enviado');
     this.sendMessage({
       protocol_version: this.PROTOCOL_VERSION,
       type: 'HANDSHAKE',
@@ -258,6 +267,7 @@ class AgentBridgeService {
 
     // 3. Receber HANDSHAKE_ACK
     if (msg.type === 'HANDSHAKE_ACK') {
+      console.log('[AgentBridge] HANDSHAKE_ACK recebido:', msg);
       if (msg.status === 'ONLINE') {
         this.setState('AGENT_ONLINE');
         this.startHeartbeat();

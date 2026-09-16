@@ -1369,6 +1369,7 @@ pause
 
   // Device telemetry & Agent controls (Real connection to 127.0.0.1:49152)
   useEffect(() => {
+    console.log('[AppContext] connect chamado');
     const unsub = agentBridge.onStateChange((state) => {
       const isOnline = state === 'AGENT_ONLINE';
       setDevice((prev) => ({
@@ -1388,8 +1389,11 @@ pause
     agentBridge.connect();
 
     return () => {
+      console.log('[AppContext] cleanup chamado');
       unsub();
-      agentBridge.disconnect();
+      // Não desconecta incondicionalmente no unmount de efeito do React StrictMode.
+      // O agentBridge é um singleton estável de sessão da aplicação. Desconectar aqui abortaria
+      // prematuramente o socket em andamento (CONNECTING) gerado pela montagem dupla do StrictMode.
     };
   }, []);
 
