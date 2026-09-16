@@ -25,6 +25,7 @@ export const ComputerView: React.FC = () => {
   const {
     device,
     toggleAgentConnection,
+    testAgentConnection,
     refreshHardwareTelemetry,
     detectAndSetRealHardware,
     isHardwareDetecting,
@@ -35,6 +36,7 @@ export const ComputerView: React.FC = () => {
   } = useApp();
 
   const [copied, setCopied] = useState(false);
+  const [isTestingAgent, setIsTestingAgent] = useState(false);
 
   const handleDownloadAgent = () => {
     addToast(
@@ -300,7 +302,7 @@ export const ComputerView: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <button
               onClick={toggleAgentConnection}
               className={`px-4 py-2 rounded-lg text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer border ${
@@ -310,6 +312,20 @@ export const ComputerView: React.FC = () => {
               }`}
             >
               {device.is_agent_connected ? t('comp_disconnect_agent') : t('comp_connect_agent')}
+            </button>
+
+            <button
+              onClick={async () => {
+                setIsTestingAgent(true);
+                await testAgentConnection();
+                setIsTestingAgent(false);
+              }}
+              disabled={isTestingAgent}
+              className="px-4 py-2 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-medium flex items-center gap-1.5 transition-colors border border-zinc-700 cursor-pointer disabled:opacity-50"
+              title="Disparar TEST_CONNECTION para 127.0.0.1:49152"
+            >
+              <Activity className={`w-3.5 h-3.5 text-zinc-400 ${isTestingAgent ? 'animate-spin' : ''}`} />
+              <span>{isTestingAgent ? 'Testando...' : 'Testar Agente'}</span>
             </button>
 
             <button

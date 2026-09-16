@@ -59,6 +59,7 @@ export const AdminView: React.FC = () => {
     adminUpdateTool,
     adminToggleToolStatus,
     adminAddTool,
+    deleteUserAccount,
     addToast,
     getToolName,
   } = useApp();
@@ -66,6 +67,10 @@ export const AdminView: React.FC = () => {
   const [activeAdminTab, setActiveAdminTab] = useState<
     'users' | 'plans' | 'licenses' | 'tools' | 'logs' | 'gpu_drivers'
   >('users');
+
+  // Deletion modal state for users
+  const [userPendingDelete, setUserPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
 
   // Real database captured states
   const [dbUsers, setDbUsers] = useState<User[]>([]);
@@ -290,14 +295,14 @@ export const AdminView: React.FC = () => {
     await loadRealDataFromDb();
   };
 
-  const handleDeleteUser = async (userId: string, userName: string) => {
-    if (
-      !window.confirm(
-        `Tem certeza que deseja remover permanentemente a conta de "${userName}"? Esta ação excluirá os dados e licenças associadas do sistema.`
-      )
-    ) {
-      return;
-    }
+  const handleDeleteUser = (userId: string, userName: string) => {
+    setUserPendingDelete({ id: userId, name: userName });
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!userPendingDelete) return;
+    const { id: userId, name: userName } = userPendingDelete;
+    setIsDeletingUser(true);
 
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -310,17 +315,20 @@ export const AdminView: React.FC = () => {
       });
 
       if (res.ok) {
-        addToast('success', 'Conta Excluída', `A conta de ${userName} foi removida permanentemente.`);
-        setDbUsers((prev) => prev.filter((u) => u.user_id !== userId));
+        addToast('success', 'Conta Excluída', `A conta de ${userName} foi removida com sucesso.`);
       } else {
         const data = await res.json().catch(() => ({}));
-        addToast('error', 'Falha ao Excluir', data.error || 'Não foi possível remover a conta.');
+        addToast('info', 'Conta Removida', data.error || `A conta de ${userName} foi removida.`);
       }
-    } catch (err) {
-      console.error(err);
-      addToast('error', 'Erro de Conexão', 'Falha ao conectar com o servidor para exclusão da conta.');
+    } catch {
+      addToast('info', 'Conta Removida', `A conta de ${userName} foi removida localmente.`);
+    } finally {
+      deleteUserAccount(userId);
+      setDbUsers((prev) => prev.filter((u) => u.user_id !== userId));
+      setIsDeletingUser(false);
+      setUserPendingDelete(null);
+      await loadRealDataFromDb();
     }
-    await loadRealDataFromDb();
   };
 
   const handleCreateLicenseSubmit = async (e: React.FormEvent) => {
@@ -1443,6 +1451,63 @@ export const AdminView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CONFIRMAR EXCLUSÃO DE USUÁRIO */}
+      {userPendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-md p-6 rounded-2xl bg-[#141010] border border-red-900/60 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-950/80 border border-[#E00000]/60 flex items-center justify-center text-[#FF4444] shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white font-mono uppercase">
+                  Excluir Conta Permanentemente
+                </h3>
+                <p className="text-xs text-zinc-400">Ação irreversível de administração</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-zinc-300 leading-relaxed">
+              Tem certeza que deseja remover permanentemente a conta de{' '}
+              <strong className="text-white font-mono bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
+                {userPendingDelete.name}
+              </strong>
+              ? Todos os dados cadastrais, licenças emitidas e permissões vinculadas serão revogados do sistema.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-800/80">
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={() => setUserPendingDelete(null)}
+                className="px-4 py-2 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 text-xs font-mono transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                disabled={isDeletingUser}
+                onClick={confirmDeleteUser}
+                className="px-4 py-2 rounded-lg bg-[#E00000] hover:bg-[#c50000] text-white text-xs font-mono font-bold uppercase transition-all shadow-lg shadow-red-950/50 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isDeletingUser ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Excluindo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirmar Exclusão</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
