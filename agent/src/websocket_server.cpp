@@ -6,6 +6,7 @@
 #include <cstring>
 #include <algorithm>
 #include <unordered_map>
+#include <cerrno>
 
 namespace Dyarte {
 namespace Agent {
@@ -256,13 +257,34 @@ bool WebSocketServer::PerformHandshake(SocketHandle clientSock) {
             break;
         }
 
+        Logger::Instance().Info("[WS DEBUG] Waiting HTTP handshake...");
         int bytes = recv(clientSock, buffer, sizeof(buffer) - 1, 0);
-        if (bytes <= 0) {
+
+        if (bytes == 0) {
+            Logger::Instance().Warn("[WS DEBUG] recv returned: 0 (client closed connection normally / sent FIN before sending HTTP headers)");
             Logger::Instance().Warn("WebSocket handshake failed: Connection closed or read error while awaiting HTTP headers.");
             return false;
+        } else if (bytes < 0) {
+#ifdef _WIN32
+            int err = WSAGetLastError();
+#else
+            int err = errno;
+#endif
+            Logger::Instance().Warn("[WS DEBUG] recv returned: " + std::to_string(bytes) + " (socket error, code: " + std::to_string(err) + ")");
+            Logger::Instance().Warn("WebSocket handshake failed: Connection closed or read error while awaiting HTTP headers.");
+            return false;
+        } else {
+            buffer[bytes] = '\0';
+            std::string prefix;
+            // Extract only up to first line or 60 chars (no cookies, tokens, or sensitive data)
+            for (int i = 0; i < bytes && i < 60; ++i) {
+                if (buffer[i] == '\r' || buffer[i] == '\n') break;
+                prefix += buffer[i];
+            }
+            Logger::Instance().Info("[WS DEBUG] recv returned: " + std::to_string(bytes));
+            Logger::Instance().Info("[WS DEBUG] Request prefix: " + prefix);
+            request.append(buffer, bytes);
         }
-        buffer[bytes] = '\0';
-        request.append(buffer, bytes);
 
         if (request.size() > 16384) {
             Logger::Instance().Warn("WebSocket handshake rejected: HTTP headers size exceeded 16 KB.");
