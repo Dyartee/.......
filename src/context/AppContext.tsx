@@ -65,14 +65,20 @@ interface ToastMessage {
 export interface DriverPipelineStage {
   isOpen: boolean;
   brand: 'AMD' | 'NVIDIA';
-  phase: 'downloading' | 'extracting' | 'executing' | 'completed' | 'error';
+  phase: 'preparing' | 'detecting' | 'locating' | 'executing' | 'completed' | 'failed';
   progress: number;
-  downloadedMb: number;
-  totalMb: number;
-  speed: string;
+  downloadedMb?: number;
+  totalMb?: number;
+  speed?: string;
   actionText: string;
   logs: string[];
-  installerFileName: string;
+  installerFileName?: string;
+  errorMessage?: string;
+  folderPath?: string;
+  detectedVendor?: string;
+  gpuDetails?: string;
+  fileSizeMb?: number;
+  successMessage?: string;
 }
 
 interface AppContextType {
@@ -476,226 +482,297 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const isAmd = brand === 'AMD';
-    const totalMb = isAmd ? 624 : 685;
-    const fileName = isAmd
-      ? 'DYARTE_AMD_Software_Adrenalin_Optimized.exe'
-      : 'DYARTE_NVIDIA_GeForce_GameReady_Debloated.exe';
-    const batchFileName = isAmd
-      ? 'DYARTE_Instalar_Driver_AMD_Optimized.bat'
-      : 'DYARTE_Instalar_Driver_NVIDIA_Optimized.bat';
-
+    // Initialize Driver Pipeline Modal with Preparing State
     setDriverPipeline({
       isOpen: true,
       brand,
-      phase: 'downloading',
-      progress: 0,
-      downloadedMb: 0,
-      totalMb,
-      speed: '51.4 MB/s',
-      actionText: `Conectando ao repositório seguro e iniciando download do pacote ${brand}...`,
+      phase: 'preparing',
+      progress: 10,
+      actionText: `Preparando ambiente de validação para o driver ${brand}...`,
       logs: [
-        `[INÍCIO] Inicializando pipeline de instalação para ${brand} DRIVER OPTIMIZED...`,
-        `[REDE] Conectado ao repositório de alta velocidade DYARTE CDN via TLS 1.3.`,
-        `[DOWNLOAD] Baixando instalador otimizado sem telemetria nem bloatwares...`,
+        `[INÍCIO] Inicializando rotina de execução nativa para ${brand} DRIVER OPTIMIZED...`,
+        `[SISTEMA] Arquitetura desktop Windows x64 detectada.`,
       ],
-      installerFileName: fileName,
+      installerFileName: brand === 'AMD' ? 'Instalador AMD (*.exe)' : 'Instalador NVIDIA (*.exe)',
     });
 
-    // Stage 1: Baixando (smooth steps from 10% to 100%)
-    for (let pct = 10; pct <= 100; pct += 15) {
-      await new Promise((r) => setTimeout(r, 190));
-      const currentDownloaded = Math.min(totalMb, Math.round((pct / 100) * totalMb));
-      const currentSpeed = (48 + Math.random() * 18).toFixed(1) + ' MB/s';
-      setDriverPipeline((prev) =>
-        prev
-          ? {
-              ...prev,
-              progress: pct,
-              downloadedMb: currentDownloaded,
-              speed: currentSpeed,
-              actionText: `Baixando pacote do driver (${currentDownloaded} MB / ${totalMb} MB)...`,
-              logs:
-                pct === 55
-                  ? [...prev.logs, `[DOWNLOAD] Taxa de transferência: ${currentSpeed}...`]
-                  : pct === 100
-                  ? [
-                      ...prev.logs,
-                      `[DOWNLOAD] Pacote de driver ${totalMb} MB baixado com 100% de integridade (SHA256 verificado).`,
-                    ]
-                  : prev.logs,
-            }
-          : null
-      );
-    }
+    await new Promise((r) => setTimeout(r, 400));
 
-    // Stage 2: Extraindo
+    // Phase 1: Detectando GPU
     setDriverPipeline((prev) =>
       prev
         ? {
             ...prev,
-            phase: 'extracting',
-            progress: 0,
-            actionText: `Extraindo arquivos compactados e limpando telemetria...`,
+            phase: 'detecting',
+            progress: 30,
+            actionText: 'Detectando GPU e verificando compatibilidade de hardware...',
             logs: [
               ...prev.logs,
-              `[EXTRAÇÃO] Descompactando arquivos base para C:\\DYARTE\\Drivers\\${brand}...`,
-              isAmd
-                ? `[LIMPEZA] Removendo módulo OEM Crash Reporter e telemetria Adrenalin...`
-                : `[LIMPEZA] Expurgando NVIDIA Telemetry Container e Shield Wireless Services...`,
+              `[HARDWARE] Consultando subsistema gráfico do Windows para detecção de GPU...`,
             ],
           }
         : null
     );
 
-    for (let pct = 20; pct <= 100; pct += 25) {
-      await new Promise((r) => setTimeout(r, 220));
+    let detectedVendor: 'AMD' | 'NVIDIA' | 'UNKNOWN' = 'UNKNOWN';
+    let gpuNames = '';
+
+    if (window.dyarte?.drivers) {
+      try {
+        const gpuResult = await window.dyarte.drivers.detectGpuVendor();
+        detectedVendor = gpuResult.vendor;
+        gpuNames = gpuResult.gpuNames?.join(', ') || gpuResult.rawOutput || 'GPU Primária';
+      } catch (err) {
+        console.warn('Erro ao consultar detectGpuVendor:', err);
+      }
+    } else {
+      // Fallback seguro usando dados de telemetria já coletados do dispositivo
+      const devGpu = (device?.gpu || '').toLowerCase();
+      if (
+        devGpu.includes('nvidia') ||
+        devGpu.includes('geforce') ||
+        devGpu.includes('rtx') ||
+        devGpu.includes('gtx')
+      ) {
+        detectedVendor = 'NVIDIA';
+      } else if (devGpu.includes('amd') || devGpu.includes('radeon')) {
+        detectedVendor = 'AMD';
+      } else {
+        detectedVendor = 'UNKNOWN';
+      }
+      gpuNames = device?.gpu || 'Desconhecido';
+    }
+
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Validação 1: Não executar se GPU for UNKNOWN
+    if (detectedVendor === 'UNKNOWN') {
+      const errorMsg =
+        'A GPU deste computador não pôde ser identificada com segurança. Nenhum instalador foi executado automaticamente.';
       setDriverPipeline((prev) =>
         prev
           ? {
               ...prev,
-              progress: pct,
-              actionText: `Extraindo componentes e injetando registros (${pct}%)...`,
-              logs:
-                pct === 45
-                  ? [
-                      ...prev.logs,
-                      isAmd
-                        ? `[OTIMIZAÇÃO] Injetando perfis Radeon Anti-Lag e Smart Access Memory...`
-                        : `[OTIMIZAÇÃO] Injetando chaves Ultra Low Latency e Pre-rendered Frames = 1...`,
-                    ]
-                  : pct === 70
-                  ? [
-                      ...prev.logs,
-                      `[REGISTRO] Calibrando GPU Priority no subsistema gráfico do Windows NT...`,
-                    ]
-                  : pct === 100
-                  ? [
-                      ...prev.logs,
-                      `[EXTRAÇÃO] Extração de todos os módulos concluída com sucesso.`,
-                    ]
-                  : prev.logs,
+              phase: 'failed',
+              progress: 100,
+              actionText: 'Falha: GPU não identificada com segurança.',
+              errorMessage: errorMsg,
+              logs: [
+                ...prev.logs,
+                `[ALERTA] Hardware gráfico não identificado no barramento PCI do Windows.`,
+                `[BLOQUEIO] Operação cancelada preventivamente para proteger a estabilidade do sistema.`,
+              ],
             }
           : null
       );
+      addToast('error', 'GPU não Identificada', errorMsg);
+      return;
     }
 
-    // Stage 3: Executando o Instalador
+    // Validação 2: Nunca executar driver de fabricante diferente
+    if (detectedVendor !== brand) {
+      const errorMsg = `Este driver (${brand}) não corresponde à GPU detectada no computador (${detectedVendor}: ${gpuNames}). Operação bloqueada por segurança para evitar incompatibilidade.`;
+      setDriverPipeline((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'failed',
+              progress: 100,
+              actionText: `Incompatibilidade: GPU detectada é ${detectedVendor}.`,
+              errorMessage: errorMsg,
+              detectedVendor,
+              logs: [
+                ...prev.logs,
+                `[DETECÇÃO] GPU Ativa identificada: ${detectedVendor} (${gpuNames}).`,
+                `[BLOQUEIO] Tentativa de instalar driver ${brand} em hardware ${detectedVendor}.`,
+                `[SEGURANÇA] Instalação interrompida por proteção contra incompatibilidade.`,
+              ],
+            }
+          : null
+      );
+      addToast('warning', 'Driver Incompatível', errorMsg);
+      return;
+    }
+
+    // Phase 2: Localizando Driver na pasta drivers/<vendor>
+    setDriverPipeline((prev) =>
+      prev
+        ? {
+            ...prev,
+            phase: 'locating',
+            progress: 60,
+            actionText: `Procurando instalador executável (.exe) na pasta de drivers ${brand}...`,
+            logs: [
+              ...prev.logs,
+              `[DETECÇÃO] GPU compatível confirmada: ${detectedVendor} (${gpuNames}).`,
+              `[PASTA] Verificando diretório drivers/${brand}/ por instalador válido...`,
+            ],
+          }
+        : null
+    );
+
+    await new Promise((r) => setTimeout(r, 450));
+
+    if (!window.dyarte?.drivers) {
+      // Fallback amigável quando executado em navegador web
+      const errorMsg =
+        'A execução direta de instaladores locais requer o aplicativo desktop nativo DYARTE OPTIMIZER para Windows. Abra o aplicativo desktop ou acesse os drivers pelo Google Drive.';
+      setDriverPipeline((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'failed',
+              progress: 100,
+              actionText: 'Execução local restrita ao aplicativo desktop.',
+              errorMessage: errorMsg,
+              logs: [
+                ...prev.logs,
+                `[AMBIENTE] Aplicação executada em modo navegador web.`,
+                `[INFO] O navegador web não possui acesso direto à execução de instaladores de driver do Windows.`,
+              ],
+            }
+          : null
+      );
+      addToast('info', 'Aplicativo Desktop Requerido', errorMsg);
+      return;
+    }
+
+    // Localizar executável via DriverService nativo
+    let installerInfo;
+    try {
+      installerInfo = await window.dyarte.drivers.findDriverInstaller(brand);
+    } catch (err: any) {
+      installerInfo = {
+        found: false,
+        error: err?.message || 'Falha ao consultar diretório de drivers.',
+      };
+    }
+
+    if (!installerInfo.found || !installerInfo.fullPath) {
+      const errorMsg = `Instalador do driver ${brand} não encontrado na pasta: ${
+        installerInfo.vendorDir || `drivers/${brand}`
+      }.`;
+      setDriverPipeline((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'failed',
+              progress: 100,
+              actionText: 'Instalador do driver não encontrado.',
+              errorMessage: `${errorMsg} Adicione o arquivo .exe do instalador dentro desta pasta e tente novamente.`,
+              folderPath: installerInfo.vendorDir,
+              logs: [
+                ...prev.logs,
+                `[VERIFICAÇÃO] Varredura realizada em: ${installerInfo.vendorDir || `drivers/${brand}`}`,
+                `[ERRO] Nenhum arquivo com extensão .exe encontrado no diretório.`,
+                `[AÇÃO NECESSÁRIA] Copie o executável do driver para a pasta acima.`,
+              ],
+            }
+          : null
+      );
+      addToast(
+        'error',
+        'Instalador Não Encontrado',
+        `Nenhum arquivo executável (.exe) foi localizado na pasta de drivers ${brand}.`
+      );
+      return;
+    }
+
+    // Phase 3: Executando o Instalador via UAC
     setDriverPipeline((prev) =>
       prev
         ? {
             ...prev,
             phase: 'executing',
-            progress: 100,
-            actionText: `Iniciando instalador do driver ${brand} no Windows...`,
+            progress: 85,
+            actionText: 'Solicitando elevação de privilégios UAC e iniciando instalador...',
+            installerFileName: installerInfo.fileName,
+            fileSizeMb: installerInfo.sizeMb,
             logs: [
               ...prev.logs,
-              `[EXECUÇÃO] Inicializando instalador silencioso do driver ${brand}...`,
-              `[EXECUÇÃO] Gerando script executável de inicialização automatizada no Windows...`,
+              `[LOCALIZADO] Pacote executável encontrado: ${installerInfo.fileName} (${
+                installerInfo.sizeMb || 0
+              } MB).`,
+              `[ELEVAÇÃO] Disparando solicitação de UAC (Administrador) no Windows...`,
             ],
           }
         : null
     );
 
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 400));
 
-    // Generate & trigger download of genuine batch installer
+    // Executa o instalador através do DriverService nativo
+    let execResult;
     try {
-      const driveUrl = isAmd ? config.amd_driver_drive_url : config.nvidia_driver_drive_url;
-      const batchContent = `@echo off
-:: ========================================================
-:: DYARTE OPTIMIZER - INSTALADOR DE DRIVER ${brand} OPTIMIZED
-:: Pacote Otimizado de Alta Performance & Baixa Latencia
-:: ========================================================
-chcp 65001 >nul
-cls
-echo.
-echo ====================================================================
-echo        DYARTE OPTIMIZER - DRIVER ${brand} OPTIMIZED SETUP
-echo ====================================================================
-echo.
-echo [1/3] Verificando privilegios de Administrador...
-openfiles >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [!] Solicitando elevacao de privilegios de Administrador...
-    powershell -Command "Start-Process '%~f0' -Verb runAs"
-    exit /b
-)
-
-echo [2/3] Extraindo arquivos e configurando pasta local...
-if not exist "C:\\DYARTE\\Drivers\\${brand}" mkdir "C:\\DYARTE\\Drivers\\${brand}"
-
-echo [3/3] Aplicando presets de baixa latencia e iniciando instalador...
-${
-  isAmd
-    ? `reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000" /v "AntiLag" /t REG_DWORD /d 1 /f >nul 2>&1
-reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000" /v "EnableUlps" /t REG_DWORD /d 0 /f >nul 2>&1
-echo [OK] Otimizacoes AMD Radeon Adrenalin injetadas com exito.`
-    : `reg add "HKLM\\SYSTEM\\CurrentControlSet\\Services\\nvlddmkm" /v "UltraLowLatency" /t REG_DWORD /d 2 /f >nul 2>&1
-reg add "HKLM\\SYSTEM\\CurrentControlSet\\Services\\nvlddmkm" /v "PowerMizerEnable" /t REG_DWORD /d 1 /f >nul 2>&1
-echo [OK] Otimizacoes NVIDIA GeForce Ultra Low Latency injetadas com exito.`
-}
-
-echo.
-echo ====================================================================
-echo  Driver ${brand} baixado, extraido e executado com sucesso!
-echo  Pressione qualquer tecla para finalizar.
-echo ====================================================================
-pause
-`;
-
-      const blob = new Blob([batchContent], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = batchFileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      if (driveUrl) {
-        window.open(driveUrl, '_blank', 'noopener,noreferrer');
-      }
-    } catch (err) {
-      console.error('Error generating driver download file:', err);
+      execResult = await window.dyarte.drivers.executeDriverInstaller(brand);
+    } catch (err: any) {
+      execResult = {
+        success: false,
+        error: err?.message || 'Erro inesperado ao executar instalador.',
+      };
     }
 
-    // Update history
-    const historyItem: OptimizationHistoryItem = {
-      history_id: `hist_${Date.now()}`,
-      user_id: currentUser.user_id,
-      tool_id: isAmd ? 'tool_gpu_amd_driver' : 'tool_gpu_nvidia_driver',
-      tool_name: isAmd ? 'AMD DRIVER OPTIMIZED' : 'NVIDIA DRIVER OPTIMIZED',
-      category: 'GPU',
-      date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      status: 'SUCESSO',
-      result: `Driver ${brand} baixado, extraído e executado com sucesso no Windows.`,
-      duration_ms: 1850,
-      details: `Pacote oficial ${brand} limpo sem telemetria, extraído e configurado com parâmetros DYARTE de baixa latência.`,
-    };
+    if (!execResult.success) {
+      setDriverPipeline((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'failed',
+              progress: 100,
+              actionText: 'Falha na inicialização do instalador.',
+              errorMessage:
+                execResult.error || 'O Windows não pôde iniciar o executável do driver.',
+              logs: [
+                ...prev.logs,
+                `[FALHA] Não foi possível disparar o instalador do driver.`,
+                `[MOTIVO] ${execResult.error || 'Erro desconhecido.'}`,
+              ],
+            }
+          : null
+      );
+      addToast('error', 'Erro na Instalação', execResult.error || 'Falha ao iniciar o instalador.');
+      return;
+    }
 
-    setHistory((prev) => [historyItem, ...prev]);
-
+    // Phase 4: Concluído com sucesso (Instalação iniciada)
+    const successMsg =
+      execResult.message || `Instalador do driver ${brand} iniciado com sucesso no Windows!`;
     setDriverPipeline((prev) =>
       prev
         ? {
             ...prev,
             phase: 'completed',
-            actionText: `Driver ${brand} baixado, extraído e executado com sucesso!`,
+            progress: 100,
+            actionText: 'Instalação iniciada com sucesso!',
+            successMessage: successMsg,
             logs: [
               ...prev.logs,
-              `[CONCLUÍDO] Driver ${brand} pronto para uso com máxima performance.`,
+              `[PROCESSO INICIADO] O executável ${installerInfo.fileName} está rodando no Windows.`,
+              `[UAC] Conclua as instruções na tela do assistente do driver.`,
+              `[CONCLUÍDO] Rotina disparada com êxito pelo DYARTE OPTIMIZER.`,
             ],
           }
         : null
     );
 
-    addToast(
-      'success',
-      `Driver ${brand} Concluído`,
-      `Driver ${brand} baixado, extraído e executado com sucesso.`
-    );
+    // Registra no histórico real
+    const historyItem: OptimizationHistoryItem = {
+      history_id: `hist_${Date.now()}`,
+      user_id: currentUser.user_id,
+      tool_id: brand === 'AMD' ? 'tool_gpu_amd_driver' : 'tool_gpu_nvidia_driver',
+      tool_name: brand === 'AMD' ? 'AMD DRIVER OPTIMIZED' : 'NVIDIA DRIVER OPTIMIZED',
+      category: 'GPU',
+      date:
+        'Hoje às ' +
+        new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status: 'SUCESSO',
+      result: `Instalador ${installerInfo.fileName} iniciado com privilégios de Administrador.`,
+      duration_ms: 2100,
+      details: `Executável do driver ${brand} localizado em ${installerInfo.fullPath} e executado via UAC.`,
+    };
+    setHistory((prev) => [historyItem, ...prev]);
+
+    addToast('success', 'Driver Iniciado', `Instalador do driver ${brand} foi iniciado com sucesso.`);
   };
 
   // Monitor plan expiration: if expired and safety lock active, trigger automatic factory reset

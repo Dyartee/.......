@@ -155,3 +155,75 @@ export interface AdminLog {
   timestamp: string;
   ip_address: string;
 }
+
+export type GpuVendor = 'AMD' | 'NVIDIA' | 'UNKNOWN';
+
+export interface DriverInstallerInfo {
+  found: boolean;
+  fileName?: string;
+  fullPath?: string;
+  vendorDir?: string;
+  sizeMb?: number;
+  error?: string;
+}
+
+export interface DriverExecutionResult {
+  success: boolean;
+  phase?: 'executing' | 'failed' | 'completed';
+  fileName?: string;
+  fullPath?: string;
+  sizeMb?: number;
+  detectedVendor?: GpuVendor;
+  message?: string;
+  error?: string;
+  gpuDetails?: string;
+  vendorDir?: string;
+}
+
+export interface GpuDetectionResult {
+  vendor: GpuVendor;
+  gpuNames: string[];
+  rawOutput: string;
+}
+
+export interface DriverStatusResult {
+  driversPath: string;
+  gpu: {
+    vendor: GpuVendor;
+    names: string[];
+    raw: string;
+  };
+  installers: {
+    amd: DriverInstallerInfo;
+    nvidia: DriverInstallerInfo;
+  };
+}
+
+export interface DyarteElectronAPI {
+  isElectron: boolean;
+  platform: string;
+  window: {
+    minimize: () => Promise<void>;
+    maximize: () => Promise<void>;
+    close: () => Promise<void>;
+    isMaximized: () => Promise<boolean>;
+  };
+  drivers: {
+    getDriversPath: () => Promise<string>;
+    detectGpuVendor: () => Promise<GpuDetectionResult>;
+    findDriverInstaller: (vendor: 'AMD' | 'NVIDIA') => Promise<DriverInstallerInfo>;
+    executeDriverInstaller: (vendor: 'AMD' | 'NVIDIA', options?: { allowSimulatedFallback?: boolean }) => Promise<DriverExecutionResult>;
+    getDriverStatus: () => Promise<DriverStatusResult>;
+  };
+  app: {
+    getVersion: () => Promise<string>;
+    openExternal: (url: string) => Promise<void>;
+  };
+}
+
+declare global {
+  interface Window {
+    dyarte?: DyarteElectronAPI;
+  }
+}
+

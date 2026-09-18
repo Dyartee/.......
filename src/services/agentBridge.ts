@@ -347,6 +347,12 @@ class AgentBridgeService {
   /**
    * Solicita aplicação de otimização por ID
    */
+  public async applyOptimization(
+    toolId: string
+  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+    return this.requestApplyOptimization(toolId);
+  }
+
   public async requestApplyOptimization(
     toolId: string
   ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
@@ -373,6 +379,12 @@ class AgentBridgeService {
   /**
    * Solicita rollback específico
    */
+  public async rollbackOptimization(
+    toolId: string
+  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+    return this.requestRollbackOptimization(toolId);
+  }
+
   public async requestRollbackOptimization(
     toolId: string
   ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
@@ -390,6 +402,51 @@ class AgentBridgeService {
     });
 
     return { success: true, state: 'REVERTENDO' };
+  }
+
+  /**
+   * Execução de driver de GPU:
+   * Interface unificada que integra o Windows Agent com a camada IPC nativa do Electron.
+   * Se o Agent possuir suporte direto via socket, envia o pacote de controle; caso contrário,
+   * despacha com segurança através da camada nativa DriverService do Electron Main Process.
+   */
+  public async executeDriver(
+    vendor: 'AMD' | 'NVIDIA',
+    installerPath?: string
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
+    console.log(`[AgentBridge] executeDriver solicitado para: ${vendor}`);
+
+    // Se estiver no aplicativo Electron Windows, utiliza o DriverService IPC
+    if (typeof window !== 'undefined' && window.dyarte?.drivers) {
+      const result = await window.dyarte.drivers.executeDriverInstaller(vendor);
+      return {
+        success: result.success,
+        message: result.message,
+        error: result.error,
+      };
+    }
+
+    // Se o Agent estiver online via WebSocket e conectado
+    if (this.connectionState === 'AGENT_ONLINE') {
+      const requestId = `drv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      this.sendMessage({
+        protocol_version: this.PROTOCOL_VERSION,
+        request_id: requestId,
+        type: 'EXECUTE_DRIVER_PACKAGE',
+        vendor,
+        installer_path: installerPath || null,
+        timestamp: Date.now(),
+      });
+      return {
+        success: true,
+        message: `Comando de execução do driver ${vendor} transmitido ao Windows Agent.`,
+      };
+    }
+
+    return {
+      success: false,
+      error: 'Instalação nativa de drivers requer o aplicativo desktop DYARTE OPTIMIZER para Windows com privilégios de Administrador.',
+    };
   }
 }
 

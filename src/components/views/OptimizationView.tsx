@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ToolCategory, Tool, PlanLevel } from '../../types';
 import { IconHelper } from '../common/IconHelper';
@@ -48,16 +48,48 @@ export const OptimizationView: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<'all' | 'unlocked' | 'locked'>('all');
   const [selectedToolDetails, setSelectedToolDetails] = useState<Tool | null>(null);
   const [gpuSelectedBrand, setGpuSelectedBrand] = useState<'AMD' | 'NVIDIA' | null>(null);
+  const [detectedGpuVendor, setDetectedGpuVendor] = useState<'AMD' | 'NVIDIA' | 'UNKNOWN'>('UNKNOWN');
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkGpu = async () => {
+      if (window.dyarte?.drivers) {
+        try {
+          const res = await window.dyarte.drivers.detectGpuVendor();
+          if (isMounted) {
+            setDetectedGpuVendor(res.vendor);
+            return;
+          }
+        } catch (e) {
+          console.warn('Erro ao detectar GPU via IPC:', e);
+        }
+      }
+      // Fallback usando telemetria
+      const devGpu = (device?.gpu || '').toLowerCase();
+      if (devGpu.includes('amd') || devGpu.includes('radeon')) {
+        if (isMounted) setDetectedGpuVendor('AMD');
+      } else if (
+        devGpu.includes('nvidia') ||
+        devGpu.includes('geforce') ||
+        devGpu.includes('rtx') ||
+        devGpu.includes('gtx')
+      ) {
+        if (isMounted) setDetectedGpuVendor('NVIDIA');
+      } else {
+        if (isMounted) setDetectedGpuVendor('UNKNOWN');
+      }
+    };
+    checkGpu();
+    return () => {
+      isMounted = false;
+    };
+  }, [device?.gpu]);
 
   const userPlanLevel = currentUser?.nivel_plano ?? 0;
 
-  const isAmdGpuDetected =
-    device?.gpu?.toLowerCase().includes('amd') || device?.gpu?.toLowerCase().includes('radeon');
-  const isNvidiaGpuDetected =
-    device?.gpu?.toLowerCase().includes('nvidia') ||
-    device?.gpu?.toLowerCase().includes('geforce') ||
-    device?.gpu?.toLowerCase().includes('rtx') ||
-    device?.gpu?.toLowerCase().includes('gtx');
+  const isAmdGpuDetected = detectedGpuVendor === 'AMD';
+  const isNvidiaGpuDetected = detectedGpuVendor === 'NVIDIA';
+  const isUnknownGpu = detectedGpuVendor === 'UNKNOWN';
 
   const categories: { id: ToolCategory | 'TODOS'; label: string; icon: React.ReactNode }[] = [
     { id: 'TODOS', label: t('opt_cat_all'), icon: <Sliders className="w-3.5 h-3.5" /> },
@@ -339,9 +371,17 @@ export const OptimizationView: React.FC = () => {
                       <div className="w-12 h-12 rounded-xl bg-red-950/60 border border-red-700/50 flex items-center justify-center text-red-500 font-mono font-black text-lg shadow-inner">
                         AMD
                       </div>
-                      {isAmdGpuDetected && (
+                      {isAmdGpuDetected ? (
                         <span className="px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-emerald-950/80 text-emerald-400 border border-emerald-700/60 flex items-center gap-1.5 shadow-sm">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> DETECTADA NESTE PC
+                          <CheckCircle2 className="w-3.5 h-3.5" /> HABILITADO (DETECTADA)
+                        </span>
+                      ) : isNvidiaGpuDetected ? (
+                        <span className="px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-zinc-900 text-zinc-500 border border-zinc-700/60 flex items-center gap-1.5 shadow-sm">
+                          DRIVER DESABILITADO (NVIDIA ATIVA)
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-amber-950/80 text-amber-400 border border-amber-700/60 flex items-center gap-1.5 shadow-sm">
+                          GPU NÃO IDENTIFICADA
                         </span>
                       )}
                     </div>
@@ -363,7 +403,7 @@ export const OptimizationView: React.FC = () => {
                     <div className="space-y-2 pt-2 border-t border-red-950/60 text-xs font-mono text-zinc-400">
                       <div className="flex items-center gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                        <span>AMD DRIVER OPTIMIZER (Pacote Otimizado)</span>
+                        <span>AMD DRIVER OPTIMIZER (Instalador Oficial)</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
@@ -391,9 +431,17 @@ export const OptimizationView: React.FC = () => {
                       <div className="w-12 h-12 rounded-xl bg-emerald-950/60 border border-emerald-700/50 flex items-center justify-center text-emerald-400 font-mono font-black text-sm shadow-inner">
                         NV
                       </div>
-                      {isNvidiaGpuDetected && (
+                      {isNvidiaGpuDetected ? (
                         <span className="px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-emerald-950/80 text-emerald-400 border border-emerald-700/60 flex items-center gap-1.5 shadow-sm">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> DETECTADA NESTE PC
+                          <CheckCircle2 className="w-3.5 h-3.5" /> HABILITADO (DETECTADA)
+                        </span>
+                      ) : isAmdGpuDetected ? (
+                        <span className="px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-zinc-900 text-zinc-500 border border-zinc-700/60 flex items-center gap-1.5 shadow-sm">
+                          DRIVER DESABILITADO (AMD ATIVA)
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-amber-950/80 text-amber-400 border border-amber-700/60 flex items-center gap-1.5 shadow-sm">
+                          GPU NÃO IDENTIFICADA
                         </span>
                       )}
                     </div>
@@ -415,7 +463,7 @@ export const OptimizationView: React.FC = () => {
                     <div className="space-y-2 pt-2 border-t border-emerald-950/60 text-xs font-mono text-zinc-400">
                       <div className="flex items-center gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        <span>NVIDIA DRIVER OPTIMIZER (Driver Limpo & Debloated)</span>
+                        <span>NVIDIA DRIVER OPTIMIZER (Instalador Oficial)</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
@@ -652,33 +700,65 @@ export const OptimizationView: React.FC = () => {
 
                           <div className="flex items-center gap-3">
                             {/* BOTAO EXECUTAR */}
-                            <button
-                              onClick={async () => {
-                                if (isDriverOptimizer && gpuSelectedBrand) {
-                                  await executeDriverPipeline(gpuSelectedBrand);
-                                } else {
-                                  await executeOptimizationTool(tool.tool_id);
+                            {isDriverOptimizer && detectedGpuVendor !== 'UNKNOWN' && detectedGpuVendor !== gpuSelectedBrand ? (
+                              <button
+                                disabled
+                                className="px-3.5 py-2 rounded-lg bg-zinc-900 text-zinc-500 border border-zinc-800 text-[11px] font-mono font-bold flex items-center gap-1.5 cursor-not-allowed"
+                                title={`GPU ativa é ${detectedGpuVendor}. O driver ${gpuSelectedBrand} não é compatível com esta placa.`}
+                              >
+                                <span>INCOMPATÍVEL ({detectedGpuVendor})</span>
+                              </button>
+                            ) : (
+                              <button
+                                onClick={async () => {
+                                  if (isDriverOptimizer && gpuSelectedBrand) {
+                                    if (detectedGpuVendor === 'UNKNOWN') {
+                                      addToast({
+                                        title: 'Identificação de GPU Necessária',
+                                        message: 'A GPU deste computador não pôde ser identificada com segurança. Nenhum instalador de driver pode ser executado automaticamente.',
+                                        type: 'warning',
+                                      });
+                                      return;
+                                    }
+                                    if (detectedGpuVendor !== gpuSelectedBrand) {
+                                      addToast({
+                                        title: 'Incompatibilidade Detectada',
+                                        message: `Este driver (${gpuSelectedBrand}) não corresponde à GPU detectada (${detectedGpuVendor}). Ação cancelada por segurança.`,
+                                        type: 'error',
+                                      });
+                                      return;
+                                    }
+                                    await executeDriverPipeline(gpuSelectedBrand);
+                                  } else {
+                                    await executeOptimizationTool(tool.tool_id);
+                                  }
+                                }}
+                                disabled={isOptimizing}
+                                className={`px-4 py-2 rounded-lg text-white text-xs font-mono font-bold flex items-center gap-2 transition-all cursor-pointer shadow-md disabled:opacity-50 ${
+                                  isDriverOptimizer && detectedGpuVendor === 'UNKNOWN'
+                                    ? 'bg-amber-700 hover:bg-amber-600'
+                                    : gpuSelectedBrand === 'AMD'
+                                    ? 'bg-red-600 hover:bg-red-500 shadow-red-900/40'
+                                    : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/40'
+                                }`}
+                                title={
+                                  isDriverOptimizer
+                                    ? `Executar instalador do driver ${gpuSelectedBrand}`
+                                    : 'Executar otimização agora'
                                 }
-                              }}
-                              disabled={isOptimizing}
-                              className={`px-4 py-2 rounded-lg text-white text-xs font-mono font-bold flex items-center gap-2 transition-all cursor-pointer shadow-md disabled:opacity-50 ${
-                                gpuSelectedBrand === 'AMD'
-                                  ? 'bg-red-600 hover:bg-red-500 shadow-red-900/40'
-                                  : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/40'
-                              }`}
-                              title={
-                                isDriverOptimizer
-                                  ? `Baixar, extrair e executar driver ${gpuSelectedBrand}`
-                                  : 'Executar otimização agora'
-                              }
-                            >
-                              {isExecuting ? (
-                                <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              ) : (
-                                <Play className="w-3.5 h-3.5 fill-current" />
-                              )}
-                              <span>EXECUTAR</span>
-                            </button>
+                              >
+                                {isExecuting ? (
+                                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <Play className="w-3.5 h-3.5 fill-current" />
+                                )}
+                                <span>
+                                  {isDriverOptimizer && detectedGpuVendor === 'UNKNOWN'
+                                    ? 'VERIFICAR'
+                                    : 'EXECUTAR'}
+                                </span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>

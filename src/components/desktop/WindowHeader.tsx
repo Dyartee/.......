@@ -26,18 +26,36 @@ export const WindowHeader: React.FC = () => {
     t,
   } = useApp();
 
+  const [isMaximized, setIsMaximized] = React.useState(false);
+
   const handleMinimize = () => {
-    // Desktop window simulation feedback
+    if (window.dyarte?.window) {
+      window.dyarte.window.minimize().catch(() => {});
+    }
+  };
+
+  const handleMaximize = () => {
+    if (window.dyarte?.window) {
+      window.dyarte.window.maximize().then(async () => {
+        const maximized = await window.dyarte?.window.isMaximized();
+        setIsMaximized(Boolean(maximized));
+      }).catch(() => {});
+    }
   };
 
   const handleClose = () => {
-    // Desktop window simulation feedback
+    if (window.dyarte?.window) {
+      window.dyarte.window.close().catch(() => {});
+    }
   };
 
   return (
-    <header className="h-10 bg-[#08080a] border-b border-[#1c1c24] flex items-center justify-between px-3 select-none z-30 shrink-0">
+    <header
+      className="h-10 bg-[#08080a] border-b border-[#1c1c24] flex items-center justify-between px-3 select-none z-30 shrink-0"
+      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+    >
       {/* Left: Brand & App Title */}
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2.5" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <DyarteLogo size="sm" showText={false} />
         <div className="flex items-baseline gap-2">
           <span className="text-xs font-bold tracking-wider text-white uppercase font-mono">
@@ -50,7 +68,7 @@ export const WindowHeader: React.FC = () => {
       </div>
 
       {/* Center: Windows Agent Live Status */}
-      <div className="hidden lg:flex items-center gap-3">
+      <div className="hidden lg:flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         <button
           onClick={toggleAgentConnection}
           className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono border transition-all cursor-pointer ${
@@ -96,7 +114,7 @@ export const WindowHeader: React.FC = () => {
       </div>
 
       {/* Right: Language Switcher, Quick Role Switcher & Windows Chrome Controls */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
         {/* Language Dropdown in Header */}
         <LanguageSwitcher className="hidden sm:flex" />
 
@@ -133,23 +151,23 @@ export const WindowHeader: React.FC = () => {
         <div className="flex items-center -mr-1">
           <button
             onClick={handleMinimize}
-            className="w-8 h-7 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors"
+            className="w-8 h-7 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors cursor-pointer"
             title="Minimizar"
             aria-label="Minimizar janela"
           >
             <Minus className="w-3 h-3" />
           </button>
           <button
-            onClick={handleMinimize}
-            className="w-8 h-7 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors"
-            title="Maximizar"
-            aria-label="Maximizar janela"
+            onClick={handleMaximize}
+            className="w-8 h-7 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800/80 transition-colors cursor-pointer"
+            title={isMaximized ? "Restaurar" : "Maximizar"}
+            aria-label="Maximizar ou restaurar janela"
           >
             <Square className="w-2.5 h-2.5" />
           </button>
           <button
             onClick={handleClose}
-            className="w-9 h-7 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-[#E00000] transition-colors"
+            className="w-9 h-7 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-[#E00000] transition-colors cursor-pointer"
             title="Fechar"
             aria-label="Fechar janela"
           >

@@ -1,5 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { initializeApp, getApps, App as AdminApp } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
@@ -709,7 +711,16 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Localização robusta do dist baseada no arquivo/runtime, sem depender de process.cwd()
+    const currentDir = typeof __dirname !== 'undefined'
+      ? __dirname
+      : path.dirname(fileURLToPath(import.meta.url));
+
+    const distPath = fs.existsSync(path.join(currentDir, 'index.html'))
+      ? currentDir
+      : path.join(currentDir, 'dist');
+
+    console.log('[Server] Servindo arquivos estáticos de produção a partir de:', distPath);
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
