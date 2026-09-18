@@ -649,7 +649,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (!installerInfo.found || !installerInfo.fullPath) {
-      const errorMsg = `Instalador do driver ${brand} não encontrado na pasta: ${
+      const errorMsg = `Instalador oficial "Setup.exe" do driver ${brand} não encontrado na pasta: ${
         installerInfo.vendorDir || `drivers/${brand}`
       }.`;
       setDriverPipeline((prev) =>
@@ -658,22 +658,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...prev,
               phase: 'failed',
               progress: 100,
-              actionText: 'Instalador do driver não encontrado.',
-              errorMessage: `${errorMsg} Adicione o arquivo .exe do instalador dentro desta pasta e tente novamente.`,
+              actionText: 'Instalador Setup.exe não encontrado.',
+              errorMessage: `${errorMsg} Adicione o arquivo "Setup.exe" dentro desta pasta e tente novamente.`,
               folderPath: installerInfo.vendorDir,
               logs: [
                 ...prev.logs,
                 `[VERIFICAÇÃO] Varredura realizada em: ${installerInfo.vendorDir || `drivers/${brand}`}`,
-                `[ERRO] Nenhum arquivo com extensão .exe encontrado no diretório.`,
-                `[AÇÃO NECESSÁRIA] Copie o executável do driver para a pasta acima.`,
+                `[ERRO] O arquivo oficial "Setup.exe" não foi localizado no diretório.`,
+                `[AÇÃO NECESSÁRIA] Coloque o executável renomeado como "Setup.exe" na pasta acima.`,
               ],
             }
           : null
       );
       addToast(
         'error',
-        'Instalador Não Encontrado',
-        `Nenhum arquivo executável (.exe) foi localizado na pasta de drivers ${brand}.`
+        'Instalador Setup.exe Ausente',
+        `O arquivo Setup.exe não foi localizado na pasta drivers/${brand}.`
       );
       return;
     }
@@ -1370,7 +1370,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addToast('success', 'Autenticado com Google', `Bem-vindo, ${userData.nome}!`);
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Falha ao autenticar com Google.' };
+      console.error('[Google Login] Erro na autenticação:', err);
+      let errorMsg = err.message || 'Falha ao autenticar com Google.';
+      
+      if (err.code === 'auth/unauthorized-domain') {
+        errorMsg = 'Domínio local não autorizado no Firebase. Adicione "localhost" e "127.0.0.1" em Firebase Console -> Authentication -> Settings -> Authorized Domains.';
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        errorMsg = 'A janela de autenticação do Google foi fechada antes da conclusão.';
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        errorMsg = 'Solicitação de login cancelada. Nova tentativa já em andamento.';
+      } else if (err.code === 'auth/network-request-failed') {
+        errorMsg = 'Falha de conexão com os servidores do Google. Verifique sua conexão com a internet.';
+      }
+
+      return { success: false, error: errorMsg };
     }
   };
 

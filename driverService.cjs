@@ -108,8 +108,8 @@ function detectGpuVendor() {
 }
 
 /**
- * Procura automaticamente qualquer executável (.exe) válido dentro da pasta do fabricante.
- * Não depende de um nome fixo como Setup.exe.
+ * Procura especificamente o arquivo Setup.exe dentro da pasta do fabricante (drivers/AMD/Setup.exe ou drivers/NVIDIA/Setup.exe).
+ * Conforme exigência do projeto, o executável deve ser EXATAMENTE Setup.exe.
  * 
  * @param {'AMD' | 'NVIDIA'} vendor 
  */
@@ -123,8 +123,10 @@ function findDriverInstaller(vendor) {
 
   const driversPath = getDriversPath();
   const vendorDir = path.join(driversPath, vendor);
+  const targetFileName = 'Setup.exe';
+  const fullPath = path.join(vendorDir, targetFileName);
 
-  console.log(`[DriverService] Procurando instalador na pasta: ${vendorDir}`);
+  console.log(`[DriverService] Procurando instalador oficial "${targetFileName}" em: ${vendorDir}`);
 
   if (!fs.existsSync(vendorDir)) {
     try {
@@ -135,38 +137,20 @@ function findDriverInstaller(vendor) {
     return {
       found: false,
       vendorDir,
-      error: `A pasta de drivers "${vendorDir}" não existia e foi criada agora. Nenhum instalador foi encontrado nela.`,
+      error: `A pasta "${vendorDir}" não existia e foi criada agora. O arquivo oficial "${targetFileName}" não foi encontrado.`,
     };
   }
 
-  let files = [];
-  try {
-    files = fs.readdirSync(vendorDir);
-  } catch (err) {
+  if (!fs.existsSync(fullPath)) {
+    console.log(`[DriverService] Arquivo oficial "${targetFileName}" ausente em: ${vendorDir}`);
     return {
       found: false,
       vendorDir,
-      error: `Falha ao ler o diretório de drivers: ${err.message}`,
+      error: `Instalador oficial "${targetFileName}" não encontrado na pasta "${vendorDir}". O arquivo deve ser exatamente "drivers\\${vendor}\\Setup.exe".`,
     };
   }
 
-  // Filtra arquivos executáveis do Windows (.exe)
-  const exeFiles = files.filter(f => f.toLowerCase().endsWith('.exe'));
-
-  if (exeFiles.length === 0) {
-    console.log(`[DriverService] Nenhum executável .exe encontrado em ${vendorDir}`);
-    return {
-      found: false,
-      vendorDir,
-      error: `Instalador do driver ${vendor} não encontrado na pasta "${vendorDir}". Coloque o arquivo .exe do instalador dentro desta pasta.`,
-    };
-  }
-
-  // Seleciona o executável principal encontrado
-  const selectedExe = exeFiles[0];
-  const fullPath = path.join(vendorDir, selectedExe);
   let sizeMb = 0;
-
   try {
     const stats = fs.statSync(fullPath);
     sizeMb = (stats.size / (1024 * 1024)).toFixed(1);
@@ -174,11 +158,11 @@ function findDriverInstaller(vendor) {
     // ignore
   }
 
-  console.log(`[DriverService] Instalador localizado: ${selectedExe} (${sizeMb} MB) em ${fullPath}`);
+  console.log(`[DriverService] Instalador oficial validado: ${targetFileName} (${sizeMb} MB) em ${fullPath}`);
 
   return {
     found: true,
-    fileName: selectedExe,
+    fileName: targetFileName,
     fullPath,
     vendorDir,
     sizeMb: Number(sizeMb),
@@ -270,17 +254,19 @@ async function executeDriverInstaller(vendor, options = {}) {
 
       return {
         success: true,
+        status: 'INSTALLER_LAUNCHED',
         phase: 'executing',
         fileName: installerResult.fileName,
         fullPath: installerResult.fullPath,
         sizeMb: installerResult.sizeMb,
         detectedVendor,
-        message: `Instalação do driver ${vendor} iniciada com sucesso. Verifique o prompt de Administrador (UAC) na barra de tarefas do Windows.`,
+        message: `Instalador oficial do driver ${vendor} disparado com privilégios de Administrador. Conclua o assistente de instalação na tela do Windows.`,
       };
     } catch (execErr) {
       console.error('[DriverService] Erro ao disparar processo com UAC no Windows:', execErr.message);
       return {
         success: false,
+        status: 'INSTALLATION_FAILED',
         phase: 'failed',
         error: `Falha ao iniciar o processo do instalador com privilégios de Administrador: ${execErr.message}`,
       };
@@ -290,12 +276,13 @@ async function executeDriverInstaller(vendor, options = {}) {
     console.log(`[DriverService] [DEV/NON-WIN] Simulação de disparo concluída para: ${targetExe}`);
     return {
       success: true,
+      status: 'INSTALLER_LAUNCHED',
       phase: 'executing',
       fileName: installerResult.fileName,
       fullPath: installerResult.fullPath,
       sizeMb: installerResult.sizeMb,
       detectedVendor,
-      message: `[Ambiente de Teste] Instalador ${installerResult.fileName} localizado e validado para execução no Windows.`,
+      message: `[Ambiente de Teste] Instalador oficial ${installerResult.fileName} localizado e validado para execução no Windows.`,
     };
   }
 }

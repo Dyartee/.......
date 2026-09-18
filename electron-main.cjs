@@ -14,6 +14,7 @@ const SERVER_URL = `http://127.0.0.1:${SERVER_PORT}`;
 
 let mainWindow = null;
 let serverProcess = null;
+let agentProcess = null;
 
 // User-Agent limpo para evitar bloqueio do Google OAuth (disallowed_useragent)
 const CHROME_USER_AGENT =
@@ -67,18 +68,30 @@ function startProductionServer() {
   const isPackaged = app.isPackaged;
   console.log(`[Electron] [Server] Modo de execução: ${isPackaged ? 'PRODUÇÃO / EMPACOTADO' : 'DESENVOLVIMENTO'}`);
 
-  // Localização de dist/server.cjs
+  const fs = require('fs');
+
+  // Determina caminhos robustos para server.cjs e pasta dist
   let serverScriptPath = path.join(__dirname, 'dist', 'server.cjs');
+  let staticDistPath = path.join(__dirname, 'dist');
+  let appBasePath = __dirname;
+
   if (isPackaged) {
-    serverScriptPath = path.join(process.resourcesPath, 'app.asar', 'dist', 'server.cjs');
-    // Fallback se asar estiver descompactado
-    const fs = require('fs');
-    if (!fs.existsSync(serverScriptPath)) {
+    appBasePath = process.resourcesPath ? process.resourcesPath : __dirname;
+    const asarServer = path.join(process.resourcesPath, 'app.asar', 'dist', 'server.cjs');
+    const asarDist = path.join(process.resourcesPath, 'app.asar', 'dist');
+
+    if (fs.existsSync(asarServer)) {
+      serverScriptPath = asarServer;
+      staticDistPath = asarDist;
+    } else {
       serverScriptPath = path.join(__dirname, 'dist', 'server.cjs');
+      staticDistPath = path.join(__dirname, 'dist');
     }
   }
 
+  console.log('[Electron] [Server] Base path:', appBasePath);
   console.log('[Electron] [Server] Caminho do executável do servidor:', serverScriptPath);
+  console.log('[Electron] [Server] Caminho estático dist:', staticDistPath);
 
   try {
     // Executa usando o runtime do Node embutido no Electron (ELECTRON_RUN_AS_NODE: 1)
@@ -88,9 +101,11 @@ function startProductionServer() {
       PORT: String(SERVER_PORT),
       NODE_ENV: 'production',
       ELECTRON_RUN_AS_NODE: '1',
+      STATIC_DIST_PATH: staticDistPath,
     };
 
     serverProcess = spawn(process.execPath, [serverScriptPath], {
+      cwd: appBasePath,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -115,6 +130,94 @@ function startProductionServer() {
     });
   } catch (err) {
     console.error('[Electron] [Server] Erro ao disparar servidor de produção:', err);
+  }
+}
+
+/**
+ * Inicia o Agente nativo do Windows (dyarte-agent.exe)
+ * Escuta exclusivamente em 127.0.0.1:49152
+ */
+function startNativeAgent() {
+  const fs = require('fs');
+  const isPackaged = app.isPackaged;
+
+  // Localização do executável do Agent
+  // Em produção/instalador: resources/agent/dyarte-agent.exe
+  // Em desenvolvimento: agent/build/Release/dyarte-agent.exe
+  const possiblePaths = [
+    path.join(process.resourcesPath || '', 'agent', 'dyarte-agent.exe'),
+    path.join(__dirname, 'agent', 'build', 'Release', 'dyarte-agent.exe'),
+    path.join(__dirname, 'agent', 'dyarte-agent.exe'),
+  ];
+
+  let agentExePath = null;
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      agentExePath = p;
+      break;
+    }
+  }
+
+  if (!agentExePath) {
+    console.log('[Electron] [Agent] Binário dyarte-agent.exe não encontrado nos caminhos padrões. Inicialização automática suspensa.');
+    return;
+  }
+
+  console.log('[Electron] [Agent] Localizado binário do Agent:', agentExePath);
+
+  try {
+    const workingDir = path.dirname(agentExePath);
+    agentProcess = spawn(agentExePath, [], {
+      cwd: workingDir,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    agentProcess.stdout?.on('data', (data) => {
+      const msg = data.toString().trim();
+      if (msg) console.log(`[Native Agent] ${msg}`);
+    });
+
+    agentProcess.stderr?.on('data', (data) => {
+      const msg = data.toString().trim();
+      if (msg) console.error(`[Native Agent Error] ${msg}`);
+    });
+
+    agentProcess.on('exit', (code, signal) => {
+      console.log(`[Electron] [Agent] Processo do Agent encerrado (código: ${code}, sinal: ${signal})`);
+      agentProcess = null;
+    });
+
+    agentProcess.on('error', (err) => {
+      console.error('[Electron] [Agent] Falha ao disparar dyarte-agent.exe:', err.message);
+      agentProcess = null;
+    });
+
+    console.log(`[Electron] [Agent] dyarte-agent.exe disparado com sucesso (PID: ${agentProcess.pid || 'ativo'}).`);
+  } catch (err) {
+    console.error('[Electron] [Agent] Erro ao iniciar dyarte-agent.exe:', err);
+  }
+}
+
+/**
+ * Encerra o processo do Native Agent com segurança
+ */
+function killAgentProcess() {
+  if (agentProcess) {
+    console.log('[Electron] [Agent] Encerrando processo do Native Agent (PID:', agentProcess.pid, ')...');
+    try {
+      if (process.platform === 'win32' && agentProcess.pid) {
+        spawn('taskkill', ['/pid', String(agentProcess.pid), '/T', '/F'], {
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+      } else {
+        agentProcess.kill('SIGTERM');
+      }
+    } catch (e) {
+      // ignore
+    }
+    agentProcess = null;
   }
 }
 
@@ -158,7 +261,8 @@ function createMainWindow() {
       url.includes('accounts.google.com') ||
       url.includes('firebaseapp.com') ||
       url.includes('/__/auth/handler') ||
-      url.includes('google.com/o/oauth2')
+      url.includes('google.com/o/oauth2') ||
+      url.includes('googleapis.com')
     ) {
       console.log('[Electron] [Auth] Permitindo popup de autenticação Google / Firebase Auth.');
       return {
@@ -172,8 +276,8 @@ function createMainWindow() {
           title: 'Google Login - DYARTE OPTIMIZER',
           webPreferences: {
             nodeIntegration: false,
-            contextIsolation: true,
-            sandbox: true,
+            contextIsolation: false, // Necessário para comunicação via postMessage/window.opener com o Firebase Auth
+            sandbox: false,
           },
         },
       };
@@ -319,6 +423,9 @@ app.whenReady().then(async () => {
     console.log('[Electron] Servidor local já está ativo na porta 3000. Reutilizando instância.');
   }
 
+  // Inicializa o Native Agent do Windows (se o executável dyarte-agent.exe estiver presente)
+  startNativeAgent();
+
   createMainWindow();
 
   app.on('activate', () => {
@@ -329,10 +436,12 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  killAgentProcess();
   killServerProcess();
 });
 
 app.on('window-all-closed', () => {
+  killAgentProcess();
   killServerProcess();
   if (process.platform !== 'darwin') {
     app.quit();

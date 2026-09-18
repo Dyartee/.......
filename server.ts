@@ -2,7 +2,6 @@ import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { initializeApp, getApps, App as AdminApp } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
@@ -705,25 +704,52 @@ app.get('/api/admin/stats', requireAuth, requireAdmin, async (req: Authenticated
 // -------------------------------------------------------------
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    // Carregamento dinâmico estritamente em ambiente de desenvolvimento
+    // Garante que o build de produção (esbuild/server.cjs) nunca faça require('vite')
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    // Localização robusta do dist baseada no arquivo/runtime, sem depender de process.cwd()
+    // Resolução resiliente da pasta dist para produção e Electron
     const currentDir = typeof __dirname !== 'undefined'
       ? __dirname
       : path.dirname(fileURLToPath(import.meta.url));
 
-    const distPath = fs.existsSync(path.join(currentDir, 'index.html'))
-      ? currentDir
-      : path.join(currentDir, 'dist');
+    const candidateDistPaths = [
+      process.env.STATIC_DIST_PATH,
+      path.join(currentDir, 'index.html') ? currentDir : '',
+      path.join(currentDir, 'dist'),
+      path.join(process.cwd(), 'dist'),
+    ].filter((p): p is string => Boolean(p && typeof p === 'string'));
 
-    console.log('[Server] Servindo arquivos estáticos de produção a partir de:', distPath);
+    let distPath = currentDir;
+    for (const cand of candidateDistPaths) {
+      if (fs.existsSync(path.join(cand, 'index.html'))) {
+        distPath = cand;
+        break;
+      }
+    }
+
+    const indexPath = path.join(distPath, 'index.html');
+    console.log('[Server] [Produção] Diretório estático resolvido:', distPath);
+    console.log('[Server] [Produção] index.html encontrado:', fs.existsSync(indexPath) ? 'SIM' : 'NÃO');
+
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send(`
+          <div style="background:#09090b;color:#f87171;padding:24px;font-family:monospace;border-radius:8px;margin:24px;">
+            <h2>[DYARTE OPTIMIZER] Erro ao carregar frontend</h2>
+            <p>Arquivo index.html não localizado em: <code>${indexPath}</code></p>
+            <p>Candidate paths testados: <code>${JSON.stringify(candidateDistPaths)}</code></p>
+          </div>
+        `);
+      }
     });
   }
 
