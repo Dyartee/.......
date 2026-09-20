@@ -713,19 +713,19 @@ export const OptimizationView: React.FC = () => {
                                 onClick={async () => {
                                   if (isDriverOptimizer && gpuSelectedBrand) {
                                     if (detectedGpuVendor === 'UNKNOWN') {
-                                      addToast({
-                                        title: 'Identificação de GPU Necessária',
-                                        message: 'A GPU deste computador não pôde ser identificada com segurança. Nenhum instalador de driver pode ser executado automaticamente.',
-                                        type: 'warning',
-                                      });
+                                      addToast(
+                                        'warning',
+                                        'Identificação de GPU Necessária',
+                                        'A GPU deste computador não pôde ser identificada com segurança. Nenhum instalador de driver pode ser executado automaticamente.'
+                                      );
                                       return;
                                     }
                                     if (detectedGpuVendor !== gpuSelectedBrand) {
-                                      addToast({
-                                        title: 'Incompatibilidade Detectada',
-                                        message: `Este driver (${gpuSelectedBrand}) não corresponde à GPU detectada (${detectedGpuVendor}). Ação cancelada por segurança.`,
-                                        type: 'error',
-                                      });
+                                      addToast(
+                                        'error',
+                                        'Incompatibilidade Detectada',
+                                        `Este driver (${gpuSelectedBrand}) não corresponde à GPU detectada (${detectedGpuVendor}). Ação cancelada por segurança.`
+                                      );
                                       return;
                                     }
                                     await executeDriverPipeline(gpuSelectedBrand);
