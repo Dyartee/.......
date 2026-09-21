@@ -99,16 +99,14 @@ export function detectRealRAM(): {
   if (deviceMem && typeof deviceMem === 'number') {
     return {
       gb: deviceMem,
-      formatted: `${deviceMem} GB RAM Detectados (Alta Performance)`,
+      formatted: `${deviceMem} GB RAM (Relatado pelo navegador)`,
     };
   }
 
-  // Fallback estimation based on logical cores
-  const cores = navigator.hardwareConcurrency || 8;
-  const estimated = cores >= 16 ? 32 : cores >= 8 ? 16 : 8;
+  // Without direct agent query, do not fake RAM capacity
   return {
-    gb: estimated,
-    formatted: `${estimated} GB RAM (Estimado pelo subsistema)`,
+    gb: 0,
+    formatted: 'Memória RAM (Aguardando leitura do Agent)',
   };
 }
 
@@ -198,22 +196,17 @@ export async function detectFullComputerSpecs(existingDevice?: DeviceInfo): Prom
     }
   }
 
-  // Ping test
-  let pingMs = 12;
+  // Real Ping test to local backend
+  let pingMs: number | null = null;
   try {
     const start = performance.now();
-    await fetch('/api/health', { method: 'GET', cache: 'no-store' }).catch(() => null);
-    const end = performance.now();
-    pingMs = Math.max(4, Math.round(end - start));
+    const res = await fetch('/api/health', { method: 'GET', cache: 'no-store' });
+    if (res.ok) {
+      const end = performance.now();
+      pingMs = Math.max(1, Math.round(end - start));
+    }
   } catch {
-    pingMs = Math.floor(8 + Math.random() * 8);
-  }
-
-  // Real or realistic memory usage
-  let ramPct = 48;
-  const perf = typeof performance !== 'undefined' ? (performance as any) : {};
-  if (perf.memory && perf.memory.usedJSHeapSize && perf.memory.jsHeapSizeLimit) {
-    ramPct = Math.min(92, Math.max(25, Math.round((perf.memory.usedJSHeapSize / perf.memory.jsHeapSizeLimit) * 100)));
+    pingMs = null;
   }
 
   return {
@@ -225,14 +218,14 @@ export async function detectFullComputerSpecs(existingDevice?: DeviceInfo): Prom
     windows: osInfo.name,
     windows_version: osInfo.version,
     build: osInfo.build,
-    device_id: existingDevice?.device_id || `DYARTE-PC-${Math.random().toString(36).substring(2, 7).toUpperCase()}`,
-    is_agent_connected: true,
-    agent_version: '1.4.2-win-x64',
-    last_heartbeat: 'Agora mesmo',
-    cpu_usage_pct: Math.floor(18 + Math.random() * 25),
-    gpu_usage_pct: Math.floor(12 + Math.random() * 28),
-    ram_usage_pct: ramPct,
-    temp_c: Math.floor(40 + Math.random() * 9),
+    device_id: existingDevice?.device_id || `DYARTE-PC-${Date.now().toString(36).toUpperCase()}`,
+    is_agent_connected: Boolean(existingDevice?.is_agent_connected),
+    agent_version: existingDevice?.agent_version || 'Aguardando Agent',
+    last_heartbeat: existingDevice?.last_heartbeat || 'Nunca conectado',
+    cpu_usage_pct: null,
+    gpu_usage_pct: null,
+    ram_usage_pct: null,
+    temp_c: null,
     ping_ms: pingMs,
   };
 }

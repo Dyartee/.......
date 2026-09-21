@@ -119,6 +119,72 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
             break;
         }
 
+        case MessageType::APPLY_OPTIMIZATION: {
+            std::string toolId = json.get_field_string("tool_id", "");
+            Logger::Instance().Info("APPLY_OPTIMIZATION received for tool: " + toolId + " (Request ID: " + requestId + ")");
+
+            if (toolId.empty()) {
+                std::string response = ResponseBuilder::BuildError(requestId, "tool_id obrigatorio para aplicacao de otimizacao.", "INVALID_TOOL");
+                g_serverInstance->SendTextMessage(clientSock, response);
+                break;
+            }
+
+            // Explicit NOT_IMPLEMENTED response: Agent does not fake success when routine is not implemented
+            std::string response = ResponseBuilder::BuildOptimizationResult(
+                requestId,
+                toolId,
+                "NOT_IMPLEMENTED",
+                false,
+                "A rotina de otimizacao de baixo nivel (" + toolId + ") ainda nao foi implementada nesta versao do DYARTE Agent."
+            );
+            g_serverInstance->SendTextMessage(clientSock, response);
+            Logger::Instance().Warn("OPTIMIZATION_RESULT dispatched with status: NOT_IMPLEMENTED (tool_id: " + toolId + ")");
+            break;
+        }
+
+        case MessageType::ROLLBACK_OPTIMIZATION: {
+            std::string toolId = json.get_field_string("tool_id", "");
+            Logger::Instance().Info("ROLLBACK_OPTIMIZATION received for tool: " + toolId + " (Request ID: " + requestId + ")");
+
+            std::string response = ResponseBuilder::BuildOptimizationResult(
+                requestId,
+                toolId,
+                "NOT_IMPLEMENTED",
+                false,
+                "Reversao nao disponivel: nenhuma operacao de baixo nivel foi aplicada anteriormente para " + toolId + "."
+            );
+            g_serverInstance->SendTextMessage(clientSock, response);
+            Logger::Instance().Warn("ROLLBACK_OPTIMIZATION dispatched with status: NOT_IMPLEMENTED");
+            break;
+        }
+
+        case MessageType::EXECUTE_DRIVER_PACKAGE: {
+            std::string vendor = json.get_field_string("vendor", "UNKNOWN");
+            Logger::Instance().Info("EXECUTE_DRIVER_PACKAGE received for vendor: " + vendor + " (Request ID: " + requestId + ")");
+
+            std::string response = ResponseBuilder::BuildDriverPackageResult(
+                requestId,
+                vendor,
+                "NOT_IMPLEMENTED",
+                false,
+                "Execucao de driver via socket no Agent nao implementada. Utilize o DriverService nativo do Electron com Setup.exe verificado."
+            );
+            g_serverInstance->SendTextMessage(clientSock, response);
+            Logger::Instance().Warn("EXECUTE_DRIVER_PACKAGE rejected: Driver execution not implemented in Agent socket.");
+            break;
+        }
+
+        case MessageType::GET_TELEMETRY: {
+            Logger::Instance().Info("GET_TELEMETRY received (Request ID: " + requestId + ")");
+            std::string response = ResponseBuilder::BuildError(
+                requestId,
+                "Telemetria continua de sensores em desenvolvimento no Agent.",
+                "NOT_IMPLEMENTED"
+            );
+            g_serverInstance->SendTextMessage(clientSock, response);
+            break;
+        }
+
         default: {
             Logger::Instance().Warn("Rejected unknown or unauthorized message type: " + typeStr);
             std::string response = ResponseBuilder::BuildError(requestId, "Unknown or unauthorized message type: " + typeStr);

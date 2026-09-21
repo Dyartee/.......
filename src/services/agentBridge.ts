@@ -354,7 +354,8 @@ class AgentBridgeService {
   }
 
   public async requestApplyOptimization(
-    toolId: string
+    toolId: string,
+    timeoutMs = 5000
   ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
     if (this.connectionState !== 'AGENT_ONLINE') {
       return {
@@ -365,15 +366,59 @@ class AgentBridgeService {
     }
 
     const requestId = `opt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    this.sendMessage({
-      protocol_version: this.PROTOCOL_VERSION,
-      request_id: requestId,
-      type: 'APPLY_OPTIMIZATION',
-      tool_id: toolId,
-      timestamp: Date.now(),
-    });
 
-    return { success: true, state: 'APLICANDO' };
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        resolve({
+          success: false,
+          state: 'FALHA',
+          error: 'Tempo limite esgotado aguardando resposta do DYARTE Agent.',
+        });
+      }, timeoutMs);
+
+      this.pendingRequests.set(requestId, {
+        resolve: (resp) => {
+          clearTimeout(timer);
+          if (resp.type === 'OPTIMIZATION_RESULT') {
+            if (resp.success) {
+              resolve({ success: true, state: 'APLICADO' });
+            } else {
+              resolve({
+                success: false,
+                state: 'FALHA',
+                error: resp.message || `Operação rejeitada pelo Agent: ${resp.status || 'Falha'}`,
+              });
+            }
+          } else if (resp.type === 'ERROR') {
+            resolve({
+              success: false,
+              state: 'FALHA',
+              error: resp.error || 'Erro reportado pelo Agent.',
+            });
+          } else {
+            resolve({
+              success: false,
+              state: 'FALHA',
+              error: 'Resposta inesperada do Agent.',
+            });
+          }
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          resolve({ success: false, state: 'FALHA', error: err.message });
+        },
+        timer,
+      });
+
+      this.sendMessage({
+        protocol_version: this.PROTOCOL_VERSION,
+        request_id: requestId,
+        type: 'APPLY_OPTIMIZATION',
+        tool_id: toolId,
+        timestamp: Date.now(),
+      });
+    });
   }
 
   /**
@@ -386,22 +431,67 @@ class AgentBridgeService {
   }
 
   public async requestRollbackOptimization(
-    toolId: string
+    toolId: string,
+    timeoutMs = 5000
   ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
     if (this.connectionState !== 'AGENT_ONLINE') {
       return { success: false, state: 'FALHA', error: 'DYARTE Agent offline.' };
     }
 
     const requestId = `rbk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    this.sendMessage({
-      protocol_version: this.PROTOCOL_VERSION,
-      request_id: requestId,
-      type: 'ROLLBACK_OPTIMIZATION',
-      tool_id: toolId,
-      timestamp: Date.now(),
-    });
 
-    return { success: true, state: 'REVERTENDO' };
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        resolve({
+          success: false,
+          state: 'FALHA',
+          error: 'Tempo limite esgotado aguardando reversão do DYARTE Agent.',
+        });
+      }, timeoutMs);
+
+      this.pendingRequests.set(requestId, {
+        resolve: (resp) => {
+          clearTimeout(timer);
+          if (resp.type === 'OPTIMIZATION_RESULT') {
+            if (resp.success) {
+              resolve({ success: true, state: 'REVERTIDO' });
+            } else {
+              resolve({
+                success: false,
+                state: 'FALHA',
+                error: resp.message || `Reversão rejeitada pelo Agent: ${resp.status || 'Falha'}`,
+              });
+            }
+          } else if (resp.type === 'ERROR') {
+            resolve({
+              success: false,
+              state: 'FALHA',
+              error: resp.error || 'Erro reportado pelo Agent.',
+            });
+          } else {
+            resolve({
+              success: false,
+              state: 'FALHA',
+              error: 'Resposta inesperada do Agent.',
+            });
+          }
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          resolve({ success: false, state: 'FALHA', error: err.message });
+        },
+        timer,
+      });
+
+      this.sendMessage({
+        protocol_version: this.PROTOCOL_VERSION,
+        request_id: requestId,
+        type: 'ROLLBACK_OPTIMIZATION',
+        tool_id: toolId,
+        timestamp: Date.now(),
+      });
+    });
   }
 
   /**

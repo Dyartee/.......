@@ -333,31 +333,33 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
       });
     }
 
-    // Record optimization history in database
+    // Record optimization authorization in database
     const historyId = `opt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const historyItem = {
+    const authItem = {
       history_id: historyId,
       user_id: uid,
       tool_id,
       tool_name: canonicalTool.name,
       category: canonicalTool.category,
       date: new Date().toISOString(),
-      status: 'SUCESSO',
-      result: 'Diretiva de otimização autorizada e agendada para execução pelo DYARTE Agent.',
-      duration_ms: 180,
+      status: 'AUTORIZADO',
+      result: 'Diretiva de otimização autorizada pelo servidor central. Requer execução local pelo DYARTE Agent.',
+      duration_ms: 0,
       details: `Execução autorizada pelo backend central (Plano Nível ${reqLevel}).`,
     };
 
-    await adminDb.collection('optimization_history').doc(historyId).set(historyItem);
+    await adminDb.collection('optimization_history').doc(historyId).set(authItem);
 
     res.json({
       success: true,
-      historyItem,
-      message: 'Otimização autorizada com êxito pelo servidor.',
+      authorized: true,
+      tool_id,
+      authItem,
+      message: 'Otimização autorizada pelo servidor. Dispare a execução local através do DYARTE Agent.',
     });
   } catch (error) {
     console.error('Erro na execução de ferramenta:', error);
-    res.status(500).json({ error: 'Erro ao processar execução da otimização no servidor.' });
+    res.status(500).json({ error: 'Erro ao processar autorização da otimização no servidor.' });
   }
 });
 
@@ -400,10 +402,26 @@ app.post('/api/device/sync', requireAuth, async (req: AuthenticatedRequest, res:
 // Cakto Payment Webhook (Strictly server-side secret validation)
 app.post('/api/webhook/cakto', async (req: Request, res: Response) => {
   try {
-    const authHeader = req.headers['authorization'] || req.headers['x-webhook-secret'];
-    const serverSecret = process.env.CAKTO_WEBHOOK_SECRET || 'dyarte_whsec_98f482a1762c90';
+    const serverSecret = process.env.CAKTO_WEBHOOK_SECRET;
 
-    if (!authHeader || (authHeader !== serverSecret && authHeader !== `Bearer ${serverSecret}`)) {
+    // Security check: in production, require CAKTO_WEBHOOK_SECRET environment variable
+    if (!serverSecret) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[Security] [Webhook] CAKTO_WEBHOOK_SECRET não configurado no ambiente de produção.');
+        return res.status(503).json({
+          error: 'Webhook de pagamento desativado: segredo de autenticação não configurado no servidor.',
+        });
+      }
+    }
+
+    const authHeader = req.headers['authorization'] || req.headers['x-webhook-secret'];
+    const activeSecret = serverSecret || (process.env.NODE_ENV !== 'production' ? 'dev_webhook_test_key' : '');
+
+    if (!activeSecret || !authHeader || (authHeader !== activeSecret && authHeader !== `Bearer ${activeSecret}`)) {
+      console.warn('[Security] [Webhook] Tentativa de acesso com segredo inválido ou ausente:', {
+        ip: req.ip,
+        timestamp: new Date().toISOString(),
+      });
       return res.status(401).json({ error: 'Assinatura ou segredo do webhook inválido.' });
     }
 
@@ -720,9 +738,10 @@ async function startServer() {
 
     const candidateDistPaths = [
       process.env.STATIC_DIST_PATH,
-      path.join(currentDir, 'index.html') ? currentDir : '',
+      currentDir,
       path.join(currentDir, 'dist'),
       path.join(process.cwd(), 'dist'),
+      process.cwd(),
     ].filter((p): p is string => Boolean(p && typeof p === 'string'));
 
     let distPath = currentDir;
@@ -753,8 +772,10 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`DYARTE OPTIMIZER Server listening on http://0.0.0.0:${PORT}`);
+  const HOST = process.env.HOST || (process.env.ELECTRON_RUN_AS_NODE ? '127.0.0.1' : '0.0.0.0');
+
+  app.listen(PORT, HOST, () => {
+    console.log(`DYARTE OPTIMIZER Server listening on http://${HOST}:${PORT}`);
   });
 }
 

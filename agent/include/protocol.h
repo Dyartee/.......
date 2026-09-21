@@ -25,6 +25,12 @@ enum class MessageType {
     PONG,
     TEST_CONNECTION,
     TEST_CONNECTION_RESULT,
+    APPLY_OPTIMIZATION,
+    ROLLBACK_OPTIMIZATION,
+    OPTIMIZATION_RESULT,
+    GET_TELEMETRY,
+    TELEMETRY_SNAPSHOT,
+    EXECUTE_DRIVER_PACKAGE,
     ERROR_RESPONSE
 };
 
@@ -36,6 +42,12 @@ inline std::string MessageTypeToString(MessageType type) {
         case MessageType::PONG: return "PONG";
         case MessageType::TEST_CONNECTION: return "TEST_CONNECTION";
         case MessageType::TEST_CONNECTION_RESULT: return "TEST_CONNECTION_RESULT";
+        case MessageType::APPLY_OPTIMIZATION: return "APPLY_OPTIMIZATION";
+        case MessageType::ROLLBACK_OPTIMIZATION: return "ROLLBACK_OPTIMIZATION";
+        case MessageType::OPTIMIZATION_RESULT: return "OPTIMIZATION_RESULT";
+        case MessageType::GET_TELEMETRY: return "GET_TELEMETRY";
+        case MessageType::TELEMETRY_SNAPSHOT: return "TELEMETRY_SNAPSHOT";
+        case MessageType::EXECUTE_DRIVER_PACKAGE: return "EXECUTE_DRIVER_PACKAGE";
         case MessageType::ERROR_RESPONSE: return "ERROR";
         default: return "UNKNOWN";
     }
@@ -45,6 +57,10 @@ inline MessageType StringToMessageType(const std::string& str) {
     if (str == "HANDSHAKE") return MessageType::HANDSHAKE;
     if (str == "PING") return MessageType::PING;
     if (str == "TEST_CONNECTION") return MessageType::TEST_CONNECTION;
+    if (str == "APPLY_OPTIMIZATION") return MessageType::APPLY_OPTIMIZATION;
+    if (str == "ROLLBACK_OPTIMIZATION") return MessageType::ROLLBACK_OPTIMIZATION;
+    if (str == "GET_TELEMETRY") return MessageType::GET_TELEMETRY;
+    if (str == "EXECUTE_DRIVER_PACKAGE") return MessageType::EXECUTE_DRIVER_PACKAGE;
     return MessageType::UNKNOWN;
 }
 
@@ -97,13 +113,51 @@ public:
         return ss.str();
     }
 
-    static std::string BuildError(const std::string& requestId, const std::string& errorMsg) {
+    static std::string BuildOptimizationResult(
+        const std::string& requestId,
+        const std::string& toolId,
+        const std::string& status,
+        bool success,
+        const std::string& message
+    ) {
+        std::stringstream ss;
+        ss << "{\"protocol_version\":1"
+           << ",\"type\":\"OPTIMIZATION_RESULT\""
+           << ",\"request_id\":\"" << EscapeString(requestId) << "\""
+           << ",\"tool_id\":\"" << EscapeString(toolId) << "\""
+           << ",\"status\":\"" << EscapeString(status) << "\""
+           << ",\"success\":" << (success ? "true" : "false")
+           << ",\"message\":\"" << EscapeString(message) << "\"}";
+        return ss.str();
+    }
+
+    static std::string BuildDriverPackageResult(
+        const std::string& requestId,
+        const std::string& vendor,
+        const std::string& status,
+        bool success,
+        const std::string& message
+    ) {
+        std::stringstream ss;
+        ss << "{\"protocol_version\":1"
+           << ",\"type\":\"DRIVER_PACKAGE_RESULT\""
+           << ",\"request_id\":\"" << EscapeString(requestId) << "\""
+           << ",\"vendor\":\"" << EscapeString(vendor) << "\""
+           << ",\"status\":\"" << EscapeString(status) << "\""
+           << ",\"success\":" << (success ? "true" : "false")
+           << ",\"message\":\"" << EscapeString(message) << "\"}";
+        return ss.str();
+    }
+
+    static std::string BuildError(const std::string& requestId, const std::string& errorMsg, const std::string& errorCode = "VALIDATION_FAILED") {
         std::stringstream ss;
         ss << "{\"protocol_version\":1";
         if (!requestId.empty()) {
             ss << ",\"request_id\":\"" << EscapeString(requestId) << "\"";
         }
-        ss << ",\"type\":\"ERROR\",\"error\":\"" << EscapeString(errorMsg) << "\"}";
+        ss << ",\"type\":\"ERROR\""
+           << ",\"error_code\":\"" << EscapeString(errorCode) << "\""
+           << ",\"error\":\"" << EscapeString(errorMsg) << "\"}";
         return ss.str();
     }
 

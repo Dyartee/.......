@@ -36,6 +36,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { agentBridge } from '../services/agentBridge';
+import { optimizationEngine } from '../services/optimizationEngine';
 
 export type NavView =
   | 'dashboard'
@@ -1515,17 +1516,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return res;
   };
 
-  const refreshHardwareTelemetry = () => {
+  const refreshHardwareTelemetry = async () => {
+    let currentPing: number | null = null;
+    try {
+      const start = performance.now();
+      const res = await fetch('/api/health', { method: 'GET', cache: 'no-store' });
+      if (res.ok) {
+        currentPing = Math.max(1, Math.round(performance.now() - start));
+      }
+    } catch {
+      currentPing = null;
+    }
+
     setDevice((prev) => ({
       ...prev,
-      cpu_usage_pct: Math.floor(25 + Math.random() * 45),
-      gpu_usage_pct: Math.floor(18 + Math.random() * 50),
-      ram_usage_pct: Math.floor(55 + Math.random() * 25),
-      temp_c: Math.floor(44 + Math.random() * 12),
-      ping_ms: Math.floor(9 + Math.random() * 15),
-      last_heartbeat: 'Agora mesmo',
+      ping_ms: currentPing,
+      last_heartbeat: prev.is_agent_connected ? 'Conectado (127.0.0.1:49152)' : 'Desconectado',
     }));
-    addToast('info', 'Telemetria Atualizada', 'Sensores de hardware e métricas do Windows lidas com sucesso.');
+    addToast('info', 'Status de Telemetria', 'Latência de rede e status da conexão com o backend verificados.');
   };
 
   const detectAndSetRealHardware = async (silent = false) => {
@@ -1622,8 +1630,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true, message: 'Driver NVIDIA baixado, extraído e executado com sucesso.' };
     }
 
-    // Realistic execution delay simulating Windows Agent calling registry/services/powershell
-    await new Promise((resolve) => setTimeout(resolve, 1400));
+    // Execution via real OptimizationEngine linked to DYARTE Agent
+    const result = await optimizationEngine.executeTool(toolId);
+
+    setIsOptimizing(false);
+    setActiveOptimizingToolId(null);
+
+    if (!result.success) {
+      // Never report SUCCESS if operation was not executed or not implemented
+      const failMsg = result.error || 'Operação não implementada no DYARTE Agent para esta versão.';
+      addToast('warning', 'Não Executado pelo Agent', failMsg);
+      return { success: false, message: failMsg };
+    }
 
     const historyItem: OptimizationHistoryItem = {
       history_id: `hist_${Date.now()}`,
@@ -1633,8 +1651,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       category: tool.categoria,
       date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       status: 'SUCESSO',
-      result: `Otimização aplicada pelo Windows Agent: ${tool.nome} (${tool.impact} impacto).`,
-      duration_ms: Math.floor(650 + Math.random() * 800),
+      result: `Otimização aplicada e confirmada pelo Windows Agent: ${tool.nome}.`,
+      duration_ms: 150,
       details: tool.details,
     };
 
@@ -1647,9 +1665,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setCurrentUser(updatedUser);
     setUsers((prev) => prev.map((u) => (u.user_id === updatedUser.user_id ? updatedUser : u)));
-
-    setIsOptimizing(false);
-    setActiveOptimizingToolId(null);
 
     addToast('success', 'Otimização Concluída', `${tool.nome} aplicada com êxito no Windows.`);
     return { success: true, message: 'Otimização aplicada com sucesso pelo Agente Windows.' };
@@ -1697,12 +1712,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsOptimizing(true);
     setActiveOptimizingToolId(toolId);
 
-    // Realistic execution delay simulating Windows Agent calling registry/services/powershell
-    await new Promise((resolve) => setTimeout(resolve, 800));
-
     const currentlyActive = !!activeToolsState[toolId];
     const willBeActive = !currentlyActive;
 
+    let result;
+    if (willBeActive) {
+      result = await optimizationEngine.executeTool(toolId);
+    } else {
+      result = await optimizationEngine.rollbackTool(toolId);
+    }
+
+    setIsOptimizing(false);
+    setActiveOptimizingToolId(null);
+
+    if (!result.success) {
+      const failMsg = result.error || 'Operação não implementada no DYARTE Agent.';
+      addToast('warning', 'Operação Não Executada', failMsg);
+      return {
+        success: false,
+        message: failMsg,
+        active: currentlyActive,
+      };
+    }
+
+    // Only update state if Agent confirmed real execution
     setActiveToolsState((prev) => {
       const updated = { ...prev, [toolId]: willBeActive };
       localStorage.setItem('dyarte_active_tools', JSON.stringify(updated));
@@ -1718,12 +1751,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       tool_name: toolTitle,
       category: tool.categoria,
       date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      status: 'SUCESSO',
+      status: willBeActive ? 'SUCESSO' : 'REVERTIDO',
       result: willBeActive
-        ? `Otimização ativada: ${toolTitle} (${tool.impact} impacto).`
-        : `Otimização desativada: ${toolTitle} revertido para a configuração padrão do Windows.`,
-      duration_ms: Math.floor(450 + Math.random() * 350),
-      details: willBeActive ? tool.details : 'Configuração padrão do Windows restaurada.',
+        ? `Otimização ativada e confirmada pelo Agent: ${toolTitle}.`
+        : `Otimização desativada e confirmada pelo Agent: ${toolTitle}.`,
+      duration_ms: 120,
+      details: willBeActive ? tool.details : 'Configuração padrão do Windows restaurada pelo Agent.',
     };
 
     setHistory((prev) => [historyItem, ...prev]);
@@ -1735,9 +1768,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setCurrentUser(updatedUser);
     setUsers((prev) => prev.map((u) => (u.user_id === updatedUser.user_id ? updatedUser : u)));
-
-    setIsOptimizing(false);
-    setActiveOptimizingToolId(null);
 
     if (willBeActive) {
       addToast('success', 'Otimização Ativada', `${toolTitle} ativado com sucesso no Windows.`);
@@ -1774,37 +1804,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Agente desconectado.' };
     }
 
-    setIsOptimizing(true);
-    setActiveOptimizingToolId('full_opt');
-
-    // Filter tools permitted for current user
-    const allowedTools = tools.filter(
-      (t) => t.status === 'ATIVO' && currentUser.nivel_plano >= t.required_plan_level
+    // Inform honestly that bulk routines require the corresponding backend agent support
+    addToast(
+      'info',
+      'Rotina Automatizada em Lote',
+      'A otimização geral automatizada em lote requer rotinas de baixo nível implementadas no Agent local. Nenhuma operação fictícia foi executada.'
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 2200));
-
-    const nowStr = 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const batchHistory: OptimizationHistoryItem = {
-      history_id: `hist_batch_${Date.now()}`,
-      user_id: currentUser.user_id,
-      tool_id: 'tool_full_system_batch',
-      tool_name: `Otimização Completa (${currentUser.plano_atual})`,
-      category: 'SISTEMA',
-      date: nowStr,
-      status: 'SUCESSO',
-      result: `${allowedTools.length} otimizações aplicadas pelo Windows Agent com sucesso.`,
-      duration_ms: 2200,
-      details: `Executados: ${allowedTools.map((t) => t.nome).slice(0, 4).join(', ')} e mais.`,
+    return {
+      success: false,
+      message: 'Rotina em lote requer implementação correspondente no DYARTE Agent.',
     };
-
-    setHistory((prev) => [batchHistory, ...prev]);
-
-    setIsOptimizing(false);
-    setActiveOptimizingToolId(null);
-
-    addToast('success', 'Sistema Otimizado', `Rotina completa concluída: ${allowedTools.length} ajustes aplicados.`);
-    return { success: true, message: 'Otimização completa finalizada!' };
   };
 
   // License manual key activation

@@ -43,91 +43,58 @@ export const RealtimeTelemetryCharts: React.FC = () => {
   const [isLive, setIsLive] = useState(true);
 
   // Buffer of data points for mini sparkline charts
-  const [samples, setSamples] = useState<TelemetrySample[]>(() => {
-    const points: TelemetrySample[] = [];
-    const now = Date.now();
-    for (let i = 14; i >= 0; i--) {
-      const timeStr = new Date(now - i * 1500).toLocaleTimeString('pt-BR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-      points.push({
-        time: timeStr,
-        cpuUsage: Math.max(8, Math.min(95, device.cpu_usage_pct + Math.floor(Math.random() * 10 - 5))),
-        cpuTemp: Math.max(38, Math.min(85, (device.temp_c || 52) - 4 + Math.floor(Math.random() * 8 - 4))),
-        gpuUsage: Math.max(5, Math.min(98, device.gpu_usage_pct + Math.floor(Math.random() * 12 - 6))),
-        gpuTemp: Math.max(42, Math.min(88, (device.temp_c || 58) + Math.floor(Math.random() * 6 - 3))),
-        ramUsage: Math.max(20, Math.min(92, device.ram_usage_pct + Math.floor(Math.random() * 4 - 2))),
-        ramFreq: 3600,
-        inputLagMs: +(1.4 + Math.random() * 1.6).toFixed(2),
-        frametimeMs: +(5.2 + Math.random() * 2.8).toFixed(1),
-      });
-    }
-    return points;
-  });
+  const [samples, setSamples] = useState<TelemetrySample[]>([]);
 
-  // Current real-time indicators
-  const latest = samples[samples.length - 1] || {
-    cpuUsage: device.cpu_usage_pct,
-    cpuTemp: 52,
-    gpuUsage: device.gpu_usage_pct,
-    gpuTemp: device.temp_c || 58,
-    ramUsage: device.ram_usage_pct,
-    ramFreq: 3600,
-    inputLagMs: device.input_lag_ms || 2.1,
-    frametimeMs: 6.2,
-  };
-
+  // Collect samples ONLY when real telemetry is reported by the agent
   useEffect(() => {
     if (!isLive) return;
+    if (device.cpu_usage_pct === null && device.gpu_usage_pct === null) {
+      return;
+    }
 
-    const timer = setInterval(() => {
-      const nowStr = new Date().toLocaleTimeString('pt-BR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
+    const nowStr = new Date().toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
 
-      const nextCpu = Math.max(
-        6,
-        Math.min(98, device.cpu_usage_pct + Math.floor(Math.random() * 14 - 7))
-      );
-      const nextCpuTemp = Math.floor(45 + (nextCpu / 100) * 26);
+    const newSample: TelemetrySample = {
+      time: nowStr,
+      cpuUsage: device.cpu_usage_pct ?? 0,
+      cpuTemp: device.temp_c ?? 0,
+      gpuUsage: device.gpu_usage_pct ?? 0,
+      gpuTemp: device.temp_c ?? 0,
+      ramUsage: device.ram_usage_pct ?? 0,
+      ramFreq: 0,
+      inputLagMs: device.input_lag_ms ?? 0,
+      frametimeMs: 0,
+    };
 
-      const nextGpu = Math.max(
-        4,
-        Math.min(99, device.gpu_usage_pct + Math.floor(Math.random() * 16 - 8))
-      );
-      const nextGpuTemp = Math.floor(48 + (nextGpu / 100) * 28);
+    setSamples((prev) => [...prev.slice(-14), newSample]);
+  }, [
+    isLive,
+    device.cpu_usage_pct,
+    device.gpu_usage_pct,
+    device.ram_usage_pct,
+    device.temp_c,
+    device.input_lag_ms,
+  ]);
 
-      const nextRam = Math.max(
-        18,
-        Math.min(92, device.ram_usage_pct + Math.floor(Math.random() * 4 - 2))
-      );
+  const hasRealTelemetry =
+    device.is_agent_connected &&
+    (device.cpu_usage_pct !== null || device.gpu_usage_pct !== null || samples.length > 0);
 
-      // Low input lag telemetry (1.1ms - 3.2ms)
-      const nextInputLag = +(1.2 + (nextCpu / 100) * 1.5 + Math.random() * 0.5).toFixed(2);
-      const nextFrametime = +(4.8 + (nextGpu / 100) * 3.6 + Math.random() * 0.8).toFixed(1);
-
-      setSamples((prev) => [
-        ...prev.slice(1),
-        {
-          time: nowStr,
-          cpuUsage: nextCpu,
-          cpuTemp: nextCpuTemp,
-          gpuUsage: nextGpu,
-          gpuTemp: nextGpuTemp,
-          ramUsage: nextRam,
-          ramFreq: 3600,
-          inputLagMs: nextInputLag,
-          frametimeMs: nextFrametime,
-        },
-      ]);
-    }, 1500);
-
-    return () => clearInterval(timer);
-  }, [isLive, device.cpu_usage_pct, device.gpu_usage_pct, device.ram_usage_pct, device.temp_c]);
+  // Current indicators from authentic device state
+  const latest = samples[samples.length - 1] || {
+    cpuUsage: device.cpu_usage_pct ?? 0,
+    cpuTemp: device.temp_c ?? 0,
+    gpuUsage: device.gpu_usage_pct ?? 0,
+    gpuTemp: device.temp_c ?? 0,
+    ramUsage: device.ram_usage_pct ?? 0,
+    ramFreq: 0,
+    inputLagMs: device.input_lag_ms ?? 0,
+    frametimeMs: 0,
+  };
 
   return (
     <div className="space-y-4">
@@ -199,58 +166,67 @@ export const RealtimeTelemetryCharts: React.FC = () => {
           </div>
 
           {/* Mini Chart CPU */}
-          <div className="h-24 w-full bg-[#0a0a0f] rounded-lg p-1 border border-zinc-800/80 overflow-hidden">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={samples} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#E00000" stopOpacity={0.6} />
-                    <stop offset="95%" stopColor="#E00000" stopOpacity={0.0} />
-                  </linearGradient>
-                  <linearGradient id="cpuTempGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (active && payload && payload.length) {
-                      return (
-                        <div className="bg-[#14141c] border border-zinc-700 px-2 py-1 rounded text-[10px] font-mono text-white shadow">
-                          <div>Uso: {payload[0]?.value}%</div>
-                          <div className="text-amber-400">Temp: {payload[1]?.value}°C</div>
-                        </div>
-                      );
-                    }
-                    return null;
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="cpuUsage"
-                  stroke="#E00000"
-                  strokeWidth={2}
-                  fillOpacity={1}
-                  fill="url(#cpuGrad)"
-                  isAnimationActive={false}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="cpuTemp"
-                  stroke="#f59e0b"
-                  strokeWidth={1.5}
-                  strokeDasharray="3 3"
-                  fillOpacity={1}
-                  fill="url(#cpuTempGrad)"
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div className="h-24 w-full bg-[#0a0a0f] rounded-lg p-1 border border-zinc-800/80 overflow-hidden flex items-center justify-center">
+            {hasRealTelemetry && samples.length > 1 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={samples} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#E00000" stopOpacity={0.6} />
+                      <stop offset="95%" stopColor="#E00000" stopOpacity={0.0} />
+                    </linearGradient>
+                    <linearGradient id="cpuTempGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.0} />
+                    </linearGradient>
+                  </defs>
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (active && payload && payload.length) {
+                        return (
+                          <div className="bg-[#14141c] border border-zinc-700 px-2 py-1 rounded text-[10px] font-mono text-white shadow">
+                            <div>Uso: {payload[0]?.value}%</div>
+                            <div className="text-amber-400">Temp: {payload[1]?.value}°C</div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="cpuUsage"
+                    stroke="#E00000"
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#cpuGrad)"
+                    isAnimationActive={false}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="cpuTemp"
+                    stroke="#f59e0b"
+                    strokeWidth={1.5}
+                    strokeDasharray="3 3"
+                    fillOpacity={1}
+                    fill="url(#cpuTempGrad)"
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-center p-2">
+                <span className="text-[11px] font-mono text-zinc-500 block">Aguardando telemetria do Agent</span>
+                <span className="text-[9px] font-mono text-zinc-600 block">Sem injeção de dados simulados</span>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 pt-1 border-t border-zinc-800/60">
-            <span>Clock: {(3.8 + (latest.cpuUsage / 100) * 0.9).toFixed(2)} GHz</span>
-            <span className="text-emerald-400 font-bold">Turbo All-Core</span>
+            <span>Fonte: {device.is_agent_connected ? 'Agent Local' : 'Desconectado'}</span>
+            <span className={device.is_agent_connected ? 'text-emerald-400 font-bold' : 'text-zinc-600'}>
+              {device.is_agent_connected ? '127.0.0.1:49152' : 'Sem conexão'}
+            </span>
           </div>
         </div>
 
