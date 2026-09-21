@@ -356,6 +356,24 @@ function setupIpcHandlers() {
     return driverService.getDriverStatus();
   });
 
+  // Ferramenta DDU (Display Driver Uninstaller) - Isolada e Segura
+  ipcMain.handle('ddu:get-path', () => {
+    return driverService.getDduPath();
+  });
+
+  ipcMain.handle('ddu:execute', async () => {
+    return await driverService.executeDdu();
+  });
+
+  // Aliases compatíveis para DDU
+  ipcMain.handle('driver:get-ddu-path', () => {
+    return driverService.getDduPath();
+  });
+
+  ipcMain.handle('driver:execute-ddu', async () => {
+    return await driverService.executeDdu();
+  });
+
   // Aplicação geral
   ipcMain.handle('app:get-version', () => {
     return app.getVersion();

@@ -117,6 +117,22 @@ export interface DeviceInfo {
   input_lag_ms?: number | null;
   ram_frequency?: string | null;
   gpu_clock_mhz?: number | null;
+  cpu_clock_mhz?: number | null;
+  cpu_power_w?: number | null;
+  cpu_temperature?: number | null;
+  gpu_temperature?: number | null;
+  gpu_power_w?: number | null;
+  gpu_memory_used_mb?: number | null;
+  gpu_memory_total_mb?: number | null;
+  ram_used_mb?: number | null;
+  ram_total_mb?: number | null;
+  fps?: number | null;
+  frametime_ms?: number | null;
+  gpu_latency_ms?: number | null;
+  active_process?: string | null;
+  active_game_pid?: number | null;
+  active_game_name?: string | null;
+  driver_version?: string | null;
   windows_license?: string | null;
   windows: string;
   windows_version: string;
@@ -172,6 +188,7 @@ export interface DriverInstallerInfo {
 
 export interface DriverExecutionResult {
   success: boolean;
+  status?: 'INSTALLER_LAUNCHED' | 'INSTALLATION_FAILED';
   phase?: 'executing' | 'failed' | 'completed';
   fileName?: string;
   fullPath?: string;
@@ -181,6 +198,43 @@ export interface DriverExecutionResult {
   error?: string;
   gpuDetails?: string;
   vendorDir?: string;
+}
+
+export type DriverPipelineStatusCode = 'PENDING' | 'FAILED' | 'SUCCESS';
+export type DriverPipelineEventCode =
+  | 'INSTALLER_LAUNCHED'
+  | 'INSTALLER_NOT_FOUND'
+  | 'GPU_UNKNOWN'
+  | 'GPU_INCOMPATIBLE'
+  | 'DESKTOP_REQUIRED'
+  | 'EXECUTION_FAILED'
+  | 'INSTALLATION_CONFIRMED';
+
+export interface DriverPipelineResult {
+  status: DriverPipelineStatusCode;
+  code: DriverPipelineEventCode;
+  success: boolean;
+  message: string;
+}
+
+export type DduStatus = 'DDU_NOT_FOUND' | 'DDU_FOUND' | 'DDU_LAUNCHED' | 'DDU_FAILED';
+
+export interface DduPathResult {
+  found: boolean;
+  fullPath: string | null;
+  fileName: string;
+  dirPath?: string;
+  sizeMb?: number;
+  error?: string;
+}
+
+export interface DduExecutionResult {
+  status: DduStatus;
+  success: boolean;
+  message: string;
+  fullPath?: string | null;
+  fileName?: string;
+  error?: string;
 }
 
 export interface GpuDetectionResult {
@@ -217,6 +271,10 @@ export interface DyarteElectronAPI {
     findDriverInstaller: (vendor: 'AMD' | 'NVIDIA') => Promise<DriverInstallerInfo>;
     executeDriverInstaller: (vendor: 'AMD' | 'NVIDIA', options?: { allowSimulatedFallback?: boolean }) => Promise<DriverExecutionResult>;
     getDriverStatus: () => Promise<DriverStatusResult>;
+  };
+  ddu: {
+    getDduPath: () => Promise<DduPathResult>;
+    executeDdu: () => Promise<DduExecutionResult>;
   };
   app: {
     getVersion: () => Promise<string>;

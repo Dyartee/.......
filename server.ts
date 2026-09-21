@@ -404,20 +404,17 @@ app.post('/api/webhook/cakto', async (req: Request, res: Response) => {
   try {
     const serverSecret = process.env.CAKTO_WEBHOOK_SECRET;
 
-    // Security check: in production, require CAKTO_WEBHOOK_SECRET environment variable
+    // Security check: CAKTO_WEBHOOK_SECRET must be configured
     if (!serverSecret) {
-      if (process.env.NODE_ENV === 'production') {
-        console.error('[Security] [Webhook] CAKTO_WEBHOOK_SECRET não configurado no ambiente de produção.');
-        return res.status(503).json({
-          error: 'Webhook de pagamento desativado: segredo de autenticação não configurado no servidor.',
-        });
-      }
+      console.error('[Security] [Webhook] CAKTO_WEBHOOK_SECRET não configurado no servidor.');
+      return res.status(503).json({
+        error: 'Webhook de pagamento desativado: segredo de autenticação (CAKTO_WEBHOOK_SECRET) não configurado no servidor.',
+      });
     }
 
     const authHeader = req.headers['authorization'] || req.headers['x-webhook-secret'];
-    const activeSecret = serverSecret || (process.env.NODE_ENV !== 'production' ? 'dev_webhook_test_key' : '');
 
-    if (!activeSecret || !authHeader || (authHeader !== activeSecret && authHeader !== `Bearer ${activeSecret}`)) {
+    if (!authHeader || (authHeader !== serverSecret && authHeader !== `Bearer ${serverSecret}`)) {
       console.warn('[Security] [Webhook] Tentativa de acesso com segredo inválido ou ausente:', {
         ip: req.ip,
         timestamp: new Date().toISOString(),

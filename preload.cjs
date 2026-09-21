@@ -31,6 +31,12 @@ contextBridge.exposeInMainWorld('dyarte', {
     getDriverStatus: () => ipcRenderer.invoke('drivers:get-status'),
   },
 
+  // Ferramenta DDU (Display Driver Uninstaller) - Execução isolada e segura
+  ddu: {
+    getDduPath: () => ipcRenderer.invoke('ddu:get-path'),
+    executeDdu: () => ipcRenderer.invoke('ddu:execute'),
+  },
+
   // Informações da aplicação
   app: {
     getVersion: () => ipcRenderer.invoke('app:get-version'),

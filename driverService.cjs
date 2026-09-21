@@ -310,10 +310,128 @@ function getDriverStatus() {
   };
 }
 
+/**
+ * Localiza especificamente o Display Driver Uninstaller (DDU).
+ * Caminho oficial: drivers/DDU/Display Driver Uninstaller.exe
+ * O nome deve ser EXATAMENTE "Display Driver Uninstaller.exe".
+ */
+function getDduPath() {
+  const driversPath = getDriversPath();
+  const dduDir = path.join(driversPath, 'DDU');
+  const targetFileName = 'Display Driver Uninstaller.exe';
+  const fullPath = path.join(dduDir, targetFileName);
+
+  console.log(`[DriverService] [DDU] Verificando existência do executável oficial em: ${fullPath}`);
+
+  if (!fs.existsSync(fullPath)) {
+    console.log(`[DriverService] [DDU] Executável "${targetFileName}" não encontrado em: ${dduDir}`);
+    return {
+      found: false,
+      fullPath: null,
+      fileName: targetFileName,
+      dirPath: dduDir,
+      error: `DDU não encontrado em "${fullPath}". Adicione o arquivo "${targetFileName}" na pasta "drivers/DDU/".`,
+    };
+  }
+
+  let sizeMb = 0;
+  try {
+    const stats = fs.statSync(fullPath);
+    sizeMb = Number((stats.size / (1024 * 1024)).toFixed(1));
+  } catch {
+    // ignore
+  }
+
+  return {
+    found: true,
+    fullPath,
+    fileName: targetFileName,
+    dirPath: dduDir,
+    sizeMb,
+  };
+}
+
+/**
+ * Executa o Display Driver Uninstaller (DDU) de forma isolada e segura.
+ * O frontend NÃO envia caminhos arbitrários. O executável deve estar estritamente
+ * no caminho validado por getDduPath().
+ * 
+ * Status emitidos:
+ * - DDU_NOT_FOUND (quando o arquivo não existe)
+ * - DDU_LAUNCHED (quando iniciado com UAC no Windows — aguardando usuário)
+ * - DDU_FAILED (quando o processo falha ao ser disparado)
+ * 
+ * NUNCA emite DDU_COMPLETED apenas por iniciar o processo.
+ */
+async function executeDdu() {
+  console.log('[DriverService] [DDU] Solicitação de inicialização do DDU recebida...');
+
+  const dduInfo = getDduPath();
+  if (!dduInfo.found || !dduInfo.fullPath) {
+    return {
+      status: 'DDU_NOT_FOUND',
+      success: false,
+      message: dduInfo.error || 'Display Driver Uninstaller.exe não encontrado.',
+      fullPath: null,
+      error: dduInfo.error,
+    };
+  }
+
+  const targetExe = dduInfo.fullPath;
+  const targetDir = dduInfo.dirPath;
+
+  if (process.platform === 'win32') {
+    try {
+      const escapedPath = targetExe.replace(/'/g, "''");
+      const workingDir = targetDir.replace(/'/g, "''");
+
+      const psScript = `Start-Process -FilePath '${escapedPath}' -WorkingDirectory '${workingDir}' -Verb RunAs`;
+      const psArgs = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript];
+
+      const child = spawn('powershell.exe', psArgs, {
+        detached: true,
+        stdio: 'ignore',
+      });
+
+      child.unref();
+
+      console.log(`[DriverService] [DDU] Processo disparado via UAC (PID: ${child.pid || 'ativo'}).`);
+
+      return {
+        status: 'DDU_LAUNCHED',
+        success: true,
+        message: 'DDU iniciado. Aguardando operação do usuário.',
+        fullPath: targetExe,
+        fileName: dduInfo.fileName,
+      };
+    } catch (err) {
+      console.error('[DriverService] [DDU] Erro ao disparar processo via UAC:', err.message);
+      return {
+        status: 'DDU_FAILED',
+        success: false,
+        message: `Falha ao iniciar o processo do DDU: ${err.message}`,
+        fullPath: targetExe,
+        error: err.message,
+      };
+    }
+  } else {
+    console.log(`[DriverService] [DDU] [DEV/NON-WIN] Executável DDU validado em: ${targetExe}`);
+    return {
+      status: 'DDU_LAUNCHED',
+      success: true,
+      message: 'DDU iniciado. Aguardando operação do usuário. (Ambiente de validação não-Windows)',
+      fullPath: targetExe,
+      fileName: dduInfo.fileName,
+    };
+  }
+}
+
 module.exports = {
   getDriversPath,
   detectGpuVendor,
   findDriverInstaller,
   executeDriverInstaller,
   getDriverStatus,
+  getDduPath,
+  executeDdu,
 };

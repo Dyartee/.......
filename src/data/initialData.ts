@@ -459,25 +459,6 @@ export const INITIAL_LICENSES: License[] = [
 // Histórico real começa vazio em uma instalação limpa
 export const INITIAL_HISTORY: OptimizationHistoryItem[] = [];
 
-// Histórico ilustrativo mantido exclusivamente para referência/demonstração
-export const DEMO_HISTORY: OptimizationHistoryItem[] = [
-  {
-    history_id: 'demo_hist_001',
-    user_id: 'demo_user',
-    device_id: 'DEMO-PC',
-    tool_id: 'tool_perf_latency_settings',
-    tool_name: '[DEMO] Configurações de Latência & Timer Resolution',
-    category: 'DESEMPENHO',
-    date: 'Modo Demonstração',
-    status: 'SUCESSO',
-    result: 'Resolução do timer ajustada em simulação.',
-    duration_ms: 840,
-    details: 'Exemplo demonstrativo.',
-    rollback_available: true,
-    agent_version: '1.0.0-demo',
-  },
-];
-
 export const INITIAL_ADMIN_LOGS: AdminLog[] = [
   {
     log_id: 'log_001',

@@ -11,6 +11,10 @@ import {
   PlanLevel,
   PlanId,
   LicenseStatus,
+  DriverPipelineResult,
+  DduStatus,
+  DduPathResult,
+  DduExecutionResult,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -206,8 +210,15 @@ interface AppContextType {
 
   // Driver Pipeline (Download, Extract & Execute)
   driverPipeline: DriverPipelineStage | null;
-  executeDriverPipeline: (brand: 'AMD' | 'NVIDIA') => Promise<void>;
+  executeDriverPipeline: (brand: 'AMD' | 'NVIDIA') => Promise<DriverPipelineResult>;
   closeDriverPipeline: () => void;
+
+  // DDU Dedicated Pipeline (Display Driver Uninstaller)
+  dduInfo: DduPathResult | null;
+  dduStatus: DduStatus | null;
+  isDduRunning: boolean;
+  checkDdu: () => Promise<DduPathResult>;
+  executeDduPipeline: () => Promise<DduExecutionResult>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -418,25 +429,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<{ success: boolean; message: string }> => {
     setIsRestoringDefaults(true);
 
-    // Simula reversão completa no NT Kernel, serviços, timers e drivers
-    await new Promise((r) => setTimeout(r, 1200));
-
-    // Reset all optimization switches to off
+    // Reset all optimization switches to off locally
     setActiveToolsState({});
     localStorage.removeItem('dyarte_active_tools');
 
-    // Registrar histórico oficial de restauração
+    // Registrar histórico oficial de desativação de ferramentas
     const historyItem: OptimizationHistoryItem = {
       history_id: `hist_factory_reset_${Date.now()}`,
       user_id: currentUser?.user_id || 'system',
       tool_id: 'tool_safety_factory_reset',
-      tool_name: 'Restauração de Fábrica do Windows (Chave de Segurança)',
+      tool_name: 'Desativação de Otimizações (Chave de Segurança)',
       category: 'SISTEMA',
       date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       status: 'SUCESSO',
-      result: `Todos os serviços (DiagTrack, WSearch), timer resolution (15.6ms), registros e drivers revertidos ao padrão original Microsoft. Motivo: ${reason}.`,
-      duration_ms: 1100,
-      details: 'Mecanismo de segurança executado com sucesso.',
+      result: `Otimizações locais desativadas no painel. Chave de segurança acionada. Motivo: ${reason}.`,
+      duration_ms: 0,
+      details: 'Mecanismo de segurança executado no painel.',
     };
 
     setHistory((prev) => [historyItem, ...prev]);
@@ -444,13 +452,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     addToast(
       'success',
-      'Padrão de Fábrica Restaurado',
-      'Todas as configurações do Windows voltaram ao estado padrão de fábrica da Microsoft com sucesso.'
+      'Otimizações Desativadas',
+      'As configurações ativas do aplicativo foram revertidas com sucesso.'
     );
 
     return {
       success: true,
-      message: 'Configurações de fábrica do Windows restauradas com sucesso.',
+      message: 'Otimizações locais desativadas com sucesso.',
     };
   };
 
@@ -466,54 +474,191 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Driver Pipeline State (Download, Extract, Execute)
   const [driverPipeline, setDriverPipeline] = useState<DriverPipelineStage | null>(null);
 
+  // DDU Dedicated Pipeline State
+  const [dduInfo, setDduInfo] = useState<DduPathResult | null>(null);
+  const [dduStatus, setDduStatus] = useState<DduStatus | null>(null);
+  const [isDduRunning, setIsDduRunning] = useState<boolean>(false);
+
   const closeDriverPipeline = () => {
     setDriverPipeline(null);
   };
 
-  const executeDriverPipeline = async (brand: 'AMD' | 'NVIDIA'): Promise<void> => {
-    if (!currentUser) return;
+  const checkDdu = async (): Promise<DduPathResult> => {
+    if (!window.dyarte?.ddu) {
+      const res: DduPathResult = {
+        found: false,
+        fullPath: null,
+        fileName: 'Display Driver Uninstaller.exe',
+        error: 'Aplicativo desktop DYARTE OPTIMIZER requerido para consultar DDU.',
+      };
+      setDduInfo(res);
+      setDduStatus('DDU_NOT_FOUND');
+      return res;
+    }
+    try {
+      const res = await window.dyarte.ddu.getDduPath();
+      setDduInfo(res);
+      setDduStatus(res.found ? 'DDU_FOUND' : 'DDU_NOT_FOUND');
+      return res;
+    } catch (err: any) {
+      const res: DduPathResult = {
+        found: false,
+        fullPath: null,
+        fileName: 'Display Driver Uninstaller.exe',
+        error: err?.message || 'Falha ao consultar caminho do DDU.',
+      };
+      setDduInfo(res);
+      setDduStatus('DDU_FAILED');
+      return res;
+    }
+  };
+
+  const executeDduPipeline = async (): Promise<DduExecutionResult> => {
+    if (!currentUser) {
+      return {
+        status: 'DDU_FAILED',
+        success: false,
+        message: 'Usuário não autenticado.',
+        error: 'Usuário não autenticado.',
+      };
+    }
+
+    if (currentUser.role !== 'ADMIN' && currentUser.nivel_plano < 3) {
+      openUpgradeModal(3, 'DDU Clean Sweep', 'GPU');
+      addToast(
+        'info',
+        'Plano Necessário',
+        'A execução do Display Driver Uninstaller requer plano Avançado ou Completo.'
+      );
+      return {
+        status: 'DDU_FAILED',
+        success: false,
+        message: 'Plano insuficiente para executar o DDU.',
+        error: 'Plano insuficiente.',
+      };
+    }
+
+    if (!window.dyarte?.ddu) {
+      const errMsg =
+        'A execução direta do DDU requer o aplicativo desktop nativo DYARTE OPTIMIZER para Windows.';
+      addToast('warning', 'Aplicativo Desktop Requerido', errMsg);
+      setDduStatus('DDU_FAILED');
+      return {
+        status: 'DDU_FAILED',
+        success: false,
+        message: errMsg,
+        error: errMsg,
+      };
+    }
+
+    setIsDduRunning(true);
+    try {
+      const execResult = await window.dyarte.ddu.executeDdu();
+      setDduStatus(execResult.status);
+
+      if (execResult.status === 'DDU_NOT_FOUND') {
+        const historyItem: OptimizationHistoryItem = {
+          history_id: `hist_ddu_${Date.now()}`,
+          user_id: currentUser.user_id,
+          tool_id: 'tool_gpu_clean_drivers',
+          tool_name: 'DDU Clean Sweep (Display Driver Uninstaller)',
+          category: 'GPU',
+          date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          status: 'FALHA',
+          result: 'DDU_NOT_FOUND: Display Driver Uninstaller.exe não encontrado em drivers/DDU/.',
+          duration_ms: 0,
+          details: execResult.error || 'Arquivo executável oficial ausente.',
+        };
+        setHistory((prev) => [historyItem, ...prev]);
+        addToast('error', 'DDU Não Encontrado', 'Display Driver Uninstaller.exe não encontrado em drivers/DDU/.');
+        return execResult;
+      }
+
+      if (execResult.status === 'DDU_LAUNCHED') {
+        const historyItem: OptimizationHistoryItem = {
+          history_id: `hist_ddu_${Date.now()}`,
+          user_id: currentUser.user_id,
+          tool_id: 'tool_gpu_clean_drivers',
+          tool_name: 'DDU Clean Sweep (Display Driver Uninstaller)',
+          category: 'GPU',
+          date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          status: 'PENDENTE',
+          result: 'DDU_LAUNCHED: DDU iniciado. Aguardando operação do usuário.',
+          duration_ms: 0,
+          details: 'Display Driver Uninstaller.exe executado via UAC. Operação manual em andamento no DDU.',
+        };
+        setHistory((prev) => [historyItem, ...prev]);
+        addToast('info', 'DDU Iniciado', 'DDU iniciado. Aguardando operação do usuário.');
+        return execResult;
+      }
+
+      // DDU_FAILED
+      const historyItem: OptimizationHistoryItem = {
+        history_id: `hist_ddu_${Date.now()}`,
+        user_id: currentUser.user_id,
+        tool_id: 'tool_gpu_clean_drivers',
+        tool_name: 'DDU Clean Sweep (Display Driver Uninstaller)',
+        category: 'GPU',
+        date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        status: 'FALHA',
+        result: `DDU_FAILED: ${execResult.error || 'Falha ao iniciar processo do DDU.'}`,
+        duration_ms: 0,
+        details: execResult.error || 'Erro na execução via UAC.',
+      };
+      setHistory((prev) => [historyItem, ...prev]);
+      addToast('error', 'Falha no DDU', execResult.error || 'Não foi possível iniciar o DDU.');
+      return execResult;
+    } catch (err: any) {
+      setDduStatus('DDU_FAILED');
+      return {
+        status: 'DDU_FAILED',
+        success: false,
+        message: err?.message || 'Erro inesperado ao executar DDU.',
+        error: err?.message || 'Erro inesperado ao executar DDU.',
+      };
+    } finally {
+      setIsDduRunning(false);
+    }
+  };
+
+  const executeDriverPipeline = async (brand: 'AMD' | 'NVIDIA'): Promise<DriverPipelineResult> => {
+    if (!currentUser) {
+      return {
+        status: 'FAILED',
+        code: 'DESKTOP_REQUIRED',
+        success: false,
+        message: 'Usuário não autenticado.',
+      };
+    }
 
     if (currentUser.role !== 'ADMIN' && currentUser.nivel_plano < 3) {
       openUpgradeModal(3, `Driver ${brand} Otimizado`, 'GPU');
       addToast(
         'info',
         'Plano Necessário',
-        `O download e instalação dos drivers ${brand} requer plano Avançado ou Completo.`
+        `A instalação dos drivers ${brand} requer plano Avançado ou Completo.`
       );
-      return;
+      return {
+        status: 'FAILED',
+        code: 'DESKTOP_REQUIRED',
+        success: false,
+        message: 'Plano insuficiente.',
+      };
     }
 
-    // Initialize Driver Pipeline Modal with Preparing State
+    // Modal de acompanhamento
     setDriverPipeline({
       isOpen: true,
       brand,
-      phase: 'preparing',
-      progress: 10,
-      actionText: `Preparando ambiente de validação para o driver ${brand}...`,
+      phase: 'detecting',
+      progress: 25,
+      actionText: `Detectando GPU e verificando compatibilidade de hardware para ${brand}...`,
       logs: [
-        `[INÍCIO] Inicializando rotina de execução nativa para ${brand} DRIVER OPTIMIZED...`,
-        `[SISTEMA] Arquitetura desktop Windows x64 detectada.`,
+        `[INÍCIO] Inicializando validação de hardware para ${brand} DRIVER OPTIMIZED...`,
+        `[SISTEMA] Consultando subsistema gráfico do Windows...`,
       ],
       installerFileName: brand === 'AMD' ? 'Instalador AMD (*.exe)' : 'Instalador NVIDIA (*.exe)',
     });
-
-    await new Promise((r) => setTimeout(r, 400));
-
-    // Phase 1: Detectando GPU
-    setDriverPipeline((prev) =>
-      prev
-        ? {
-            ...prev,
-            phase: 'detecting',
-            progress: 30,
-            actionText: 'Detectando GPU e verificando compatibilidade de hardware...',
-            logs: [
-              ...prev.logs,
-              `[HARDWARE] Consultando subsistema gráfico do Windows para detecção de GPU...`,
-            ],
-          }
-        : null
-    );
 
     let detectedVendor: 'AMD' | 'NVIDIA' | 'UNKNOWN' = 'UNKNOWN';
     let gpuNames = '';
@@ -527,7 +672,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('Erro ao consultar detectGpuVendor:', err);
       }
     } else {
-      // Fallback seguro usando dados de telemetria já coletados do dispositivo
       const devGpu = (device?.gpu || '').toLowerCase();
       if (
         devGpu.includes('nvidia') ||
@@ -544,9 +688,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       gpuNames = device?.gpu || 'Desconhecido';
     }
 
-    await new Promise((r) => setTimeout(r, 400));
-
-    // Validação 1: Não executar se GPU for UNKNOWN
     if (detectedVendor === 'UNKNOWN') {
       const errorMsg =
         'A GPU deste computador não pôde ser identificada com segurança. Nenhum instalador foi executado automaticamente.';
@@ -567,10 +708,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : null
       );
       addToast('error', 'GPU não Identificada', errorMsg);
-      return;
+      return {
+        status: 'FAILED',
+        code: 'GPU_UNKNOWN',
+        success: false,
+        message: errorMsg,
+      };
     }
 
-    // Validação 2: Nunca executar driver de fabricante diferente
     if (detectedVendor !== brand) {
       const errorMsg = `Este driver (${brand}) não corresponde à GPU detectada no computador (${detectedVendor}: ${gpuNames}). Operação bloqueada por segurança para evitar incompatibilidade.`;
       setDriverPipeline((prev) =>
@@ -592,30 +737,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : null
       );
       addToast('warning', 'Driver Incompatível', errorMsg);
-      return;
+      return {
+        status: 'FAILED',
+        code: 'GPU_INCOMPATIBLE',
+        success: false,
+        message: errorMsg,
+      };
     }
 
-    // Phase 2: Localizando Driver na pasta drivers/<vendor>
-    setDriverPipeline((prev) =>
-      prev
-        ? {
-            ...prev,
-            phase: 'locating',
-            progress: 60,
-            actionText: `Procurando instalador executável (.exe) na pasta de drivers ${brand}...`,
-            logs: [
-              ...prev.logs,
-              `[DETECÇÃO] GPU compatível confirmada: ${detectedVendor} (${gpuNames}).`,
-              `[PASTA] Verificando diretório drivers/${brand}/ por instalador válido...`,
-            ],
-          }
-        : null
-    );
-
-    await new Promise((r) => setTimeout(r, 450));
-
     if (!window.dyarte?.drivers) {
-      // Fallback amigável quando executado em navegador web
       const errorMsg =
         'A execução direta de instaladores locais requer o aplicativo desktop nativo DYARTE OPTIMIZER para Windows. Abra o aplicativo desktop ou acesse os drivers pelo Google Drive.';
       setDriverPipeline((prev) =>
@@ -635,7 +765,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : null
       );
       addToast('info', 'Aplicativo Desktop Requerido', errorMsg);
-      return;
+      return {
+        status: 'FAILED',
+        code: 'DESKTOP_REQUIRED',
+        success: false,
+        message: errorMsg,
+      };
     }
 
     // Localizar executável via DriverService nativo
@@ -676,31 +811,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         'Instalador Setup.exe Ausente',
         `O arquivo Setup.exe não foi localizado na pasta drivers/${brand}.`
       );
-      return;
+      return {
+        status: 'FAILED',
+        code: 'INSTALLER_NOT_FOUND',
+        success: false,
+        message: errorMsg,
+      };
     }
-
-    // Phase 3: Executando o Instalador via UAC
-    setDriverPipeline((prev) =>
-      prev
-        ? {
-            ...prev,
-            phase: 'executing',
-            progress: 85,
-            actionText: 'Solicitando elevação de privilégios UAC e iniciando instalador...',
-            installerFileName: installerInfo.fileName,
-            fileSizeMb: installerInfo.sizeMb,
-            logs: [
-              ...prev.logs,
-              `[LOCALIZADO] Pacote executável encontrado: ${installerInfo.fileName} (${
-                installerInfo.sizeMb || 0
-              } MB).`,
-              `[ELEVAÇÃO] Disparando solicitação de UAC (Administrador) no Windows...`,
-            ],
-          }
-        : null
-    );
-
-    await new Promise((r) => setTimeout(r, 400));
 
     // Executa o instalador através do DriverService nativo
     let execResult;
@@ -732,10 +849,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : null
       );
       addToast('error', 'Erro na Instalação', execResult.error || 'Falha ao iniciar o instalador.');
-      return;
+      return {
+        status: 'FAILED',
+        code: 'EXECUTION_FAILED',
+        success: false,
+        message: execResult.error || 'Falha ao iniciar o instalador.',
+      };
     }
 
-    // Phase 4: Instalador disparado (AGUARDANDO CONCLUSÃO DO ASSISTENTE)
+    // Instalador disparado (AGUARDANDO CONCLUSÃO DO ASSISTENTE)
     const successMsg =
       execResult.message || `Instalador do driver ${brand} iniciado no Windows. Conclua no assistente da GPU.`;
     setDriverPipeline((prev) =>
@@ -756,7 +878,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : null
     );
 
-    // Registra no histórico real com status PENDENTE (nunca sucesso prematuro antes de concluir)
+    // Registra no histórico com status PENDENTE (nunca sucesso prematuro antes de concluir)
     const historyItem: OptimizationHistoryItem = {
       history_id: `hist_${Date.now()}`,
       user_id: currentUser.user_id,
@@ -767,13 +889,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         'Hoje às ' +
         new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       status: 'PENDENTE',
-      result: `INSTALLER_LAUNCHED: Instalador ${installerInfo.fileName} aberto via UAC. Aguardando conclusão do usuário.`,
-      duration_ms: 2100,
+      result: `INSTALLER_LAUNCHED: Instalador ${installerInfo.fileName} aberto via UAC. Aguardando conclusão do usuário no instalador oficial.`,
+      duration_ms: 0,
       details: `Executável do driver ${brand} localizado em ${installerInfo.fullPath} e executado via UAC.`,
     };
     setHistory((prev) => [historyItem, ...prev]);
 
     addToast('info', 'Instalador Aberto', `Instalador do driver ${brand} iniciado. Conclua as etapas no assistente.`);
+
+    return {
+      status: 'PENDING',
+      code: 'INSTALLER_LAUNCHED',
+      success: false,
+      message: successMsg,
+    };
   };
 
   // Monitor plan expiration: if expired and safety lock active, trigger automatic factory reset
@@ -1460,11 +1589,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     });
 
+    const unsubTelemetry = agentBridge.onTelemetry((snapshot) => {
+      if (!snapshot?.telemetry) return;
+      const t = snapshot.telemetry;
+      setDevice((prev) => ({
+        ...prev,
+        cpu_usage_pct: t.cpu_usage ?? prev.cpu_usage_pct,
+        gpu_usage_pct: t.gpu_usage ?? prev.gpu_usage_pct,
+        ram_usage_pct: t.ram_usage_pct ?? prev.ram_usage_pct,
+        cpu_clock_mhz: t.cpu_clock_mhz ?? prev.cpu_clock_mhz,
+        cpu_power_w: t.cpu_power_w ?? prev.cpu_power_w,
+        cpu_temperature: t.cpu_temperature ?? prev.cpu_temperature,
+        gpu_temperature: t.gpu_temperature ?? prev.gpu_temperature,
+        temp_c: t.cpu_temperature ?? t.gpu_temperature ?? prev.temp_c,
+        gpu_clock_mhz: t.gpu_clock_mhz ?? prev.gpu_clock_mhz,
+        gpu_power_w: t.gpu_power_w ?? prev.gpu_power_w,
+        gpu_memory_used_mb: t.gpu_memory_used_mb ?? prev.gpu_memory_used_mb,
+        gpu_memory_total_mb: t.gpu_memory_total_mb ?? prev.gpu_memory_total_mb,
+        ram_used_mb: t.ram_used_mb ?? prev.ram_used_mb,
+        ram_total_mb: t.ram_total_mb ?? prev.ram_total_mb,
+        fps: t.fps ?? prev.fps,
+        frametime_ms: t.frametime_ms ?? prev.frametime_ms,
+        gpu_latency_ms: t.gpu_latency_ms ?? prev.gpu_latency_ms,
+        input_lag_ms: t.gpu_latency_ms ?? prev.input_lag_ms,
+        active_process: t.active_process ?? prev.active_process,
+        active_game_pid: t.active_game_pid ?? prev.active_game_pid,
+        active_game_name: t.active_game_name ?? prev.active_game_name,
+        driver_version: t.driver_version ?? prev.driver_version,
+      }));
+    });
+
     agentBridge.connect();
 
     return () => {
       console.log('[AppContext] cleanup chamado');
       unsub();
+      unsubTelemetry();
       // Não desconecta incondicionalmente no unmount de efeito do React StrictMode.
       // O agentBridge é um singleton estável de sessão da aplicação. Desconectar aqui abortaria
       // prematuramente o socket em andamento (CONNECTING) gerado pela montagem dupla do StrictMode.
@@ -1598,19 +1758,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsOptimizing(true);
     setActiveOptimizingToolId(toolId);
 
-    // If it's AMD or NVIDIA driver tools, trigger full driver download, extraction and execution pipeline
+    // If it's AMD or NVIDIA driver tools, trigger driver pipeline
     if (toolId === 'tool_gpu_amd_driver' || toolId === 'tool_gpu_amd_opt') {
-      await executeDriverPipeline('AMD');
+      const pipeRes = await executeDriverPipeline('AMD');
       setIsOptimizing(false);
       setActiveOptimizingToolId(null);
-      return { success: true, message: 'Instalador do driver AMD iniciado no Windows. Conclua no assistente.' };
+      return { success: false, message: pipeRes.message };
     }
 
     if (toolId === 'tool_gpu_nvidia_driver' || toolId === 'tool_gpu_nvidia_opt') {
-      await executeDriverPipeline('NVIDIA');
+      const pipeRes = await executeDriverPipeline('NVIDIA');
       setIsOptimizing(false);
       setActiveOptimizingToolId(null);
-      return { success: true, message: 'Instalador do driver NVIDIA iniciado no Windows. Conclua no assistente.' };
+      return { success: false, message: pipeRes.message };
+    }
+
+    // If it's DDU clean tool, trigger dedicated DDU pipeline
+    if (toolId === 'tool_gpu_clean_drivers') {
+      const dduRes = await executeDduPipeline();
+      setIsOptimizing(false);
+      setActiveOptimizingToolId(null);
+      return {
+        success: false,
+        message:
+          dduRes.status === 'DDU_LAUNCHED'
+            ? 'DDU iniciado. Aguardando operação do usuário no Display Driver Uninstaller.'
+            : dduRes.error || 'DDU não pôde ser iniciado.',
+      };
     }
 
     // Execution via real OptimizationEngine linked to DYARTE Agent
@@ -2210,6 +2384,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     driverPipeline,
     executeDriverPipeline,
     closeDriverPipeline,
+    dduInfo,
+    dduStatus,
+    isDduRunning,
+    checkDdu,
+    executeDduPipeline,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -1,15 +1,21 @@
 import { DeviceInfo } from '../types';
 
 /**
- * Clean up the GPU name from WebGL unmasked renderer string
+ * DYARTE OPTIMIZER - Hardware Detection Service
+ * Regra: Browser APIs NÃO são fontes oficiais de hardware para o Windows.
+ * Fontes oficiais: Electron -> IPC -> Native Agent -> Windows APIs (WMI/DirectX/Win32).
+ * 
+ * Se o dado não vier de fonte oficial, deve ser explicitamente rotulado como
+ * "(Reportado pelo navegador)" ou retornar "N/D" / null.
+ */
+
+/**
+ * Limpa a string de renderer do WebGL para exibição secundária do navegador.
  */
 export function cleanGpuRenderer(raw: string): string {
   if (!raw || !raw.trim()) return 'N/D';
   let cleaned = raw;
 
-  // Format: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
-  // or "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)"
-  // or "ANGLE (Apple, Apple M2 Max, OpenGL 4.1)"
   if (cleaned.includes('ANGLE (')) {
     const parts = cleaned.match(/ANGLE \([^,]+,\s*([^,]+)/);
     if (parts && parts[1]) {
@@ -19,41 +25,40 @@ export function cleanGpuRenderer(raw: string): string {
     }
   }
 
-  // Remove redundant "(R)", "(TM)" for cleaner presentation
   cleaned = cleaned.replace(/\(R\)/gi, '').replace(/\(TM\)/gi, '').trim();
-
   return cleaned || 'N/D';
 }
 
 /**
- * Inspect client GPU via WebGL context
+ * Inspeciona GPU via WebGL apenas como informação do navegador.
+ * NUNCA deve ser tratada como confirmação definitiva de hardware nativo.
  */
 export function detectRealGPU(): string {
   try {
+    if (typeof document === 'undefined') return 'N/D';
     const canvas = document.createElement('canvas');
     const gl =
       canvas.getContext('webgl') ||
       (canvas.getContext('experimental-webgl') as WebGLRenderingContext | null);
 
-    if (!gl) {
-      return 'N/D';
-    }
+    if (!gl) return 'N/D';
 
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-    if (!debugInfo) {
-      return 'N/D';
-    }
+    if (!debugInfo) return 'N/D';
 
     const unmasked = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
-    return cleanGpuRenderer(String(unmasked));
-  } catch (err) {
-    console.warn('Hardware GPU detection error:', err);
+    const cleaned = cleanGpuRenderer(String(unmasked));
+    if (!cleaned || cleaned === 'N/D') return 'N/D';
+
+    return `${cleaned} (WebGL / Navegador)`;
+  } catch {
     return 'N/D';
   }
 }
 
 /**
- * Detect real CPU Cores and Architecture
+ * Detecta núcleos lógicos reportados pelo navegador.
+ * NUNCA inventa modelo comercial de CPU (e.g. Ryzen, Intel Core i7).
  */
 export function detectRealCPU(): {
   name: string;
@@ -74,26 +79,27 @@ export function detectRealCPU(): {
   }
 
   return {
-    name: `${cores} Núcleos Lógicos (${arch})`,
+    name: `${cores} Núcleos Lógicos (Reportado pelo navegador)`,
     cores,
     arch,
   };
 }
 
 /**
- * Detect client RAM in GB (Supported on Chrome, Edge, Opera, Chromium)
+ * Informa memória aproximada reportada pela API do navegador.
+ * Não deve ser tratada como capacidade física exata instalada na placa-mãe.
  */
 export function detectRealRAM(): {
   gb: number;
   formatted: string;
 } {
   const nav = typeof navigator !== 'undefined' ? (navigator as any) : {};
-  const deviceMem = nav.deviceMemory; // in GB: e.g. 8, 16, 32
+  const deviceMem = nav.deviceMemory;
 
   if (deviceMem && typeof deviceMem === 'number') {
     return {
       gb: deviceMem,
-      formatted: `${deviceMem} GB RAM (Navegador)`,
+      formatted: `${deviceMem} GB RAM (Estimado pelo navegador)`,
     };
   }
 
@@ -104,7 +110,7 @@ export function detectRealRAM(): {
 }
 
 /**
- * Detect Windows version or client OS
+ * Detecta OS aproximado a partir do User-Agent
  */
 export function detectRealOS(): {
   name: string;
@@ -119,15 +125,15 @@ export function detectRealOS(): {
 
   if (ua.includes('Windows NT 10.0')) {
     name = 'Windows 10 / 11';
-    version = 'Edição 64-bit';
+    version = 'Reportado via Browser';
     build = 'Kernel NT 10.0';
   } else if (ua.includes('Windows NT 6.3')) {
     name = 'Windows 8.1';
-    version = '64-bit';
+    version = 'Reportado via Browser';
     build = 'Kernel NT 6.3';
   } else if (ua.includes('Windows NT 6.1')) {
     name = 'Windows 7';
-    version = 'SP1';
+    version = 'Reportado via Browser';
     build = 'Kernel NT 6.1';
   } else if (ua.includes('Macintosh') || ua.includes('Mac OS X')) {
     name = 'macOS';
@@ -136,14 +142,14 @@ export function detectRealOS(): {
   } else if (ua.includes('Linux')) {
     name = 'Linux';
     version = 'GNU/Linux';
-    build = 'Kernel 6.x';
+    build = 'Kernel Linux';
   }
 
   return { name, version, build };
 }
 
 /**
- * Detect Screen / Monitor resolution
+ * Detecta resolução do monitor via Screen API
  */
 export function detectRealScreen(): string {
   if (typeof window === 'undefined' || !window.screen) {
@@ -163,41 +169,19 @@ export function detectRealScreen(): string {
 }
 
 /**
- * Build a complete real DeviceInfo object detected from the user's computer
+ * Constrói as especificações do dispositivo respeitando a hierarquia de fontes:
+ * 1. Electron IPC (WMI nativo do Windows)
+ * 2. Dados reais persistidos anteriormente (sem valores de mock)
+ * 3. Browser APIs (explicitamente identificadas como navegador)
+ * 4. N/D para qualquer dado não verificado
  */
 export async function detectFullComputerSpecs(existingDevice?: DeviceInfo): Promise<DeviceInfo> {
   const cpuInfo = detectRealCPU();
-  const realGpu = detectRealGPU();
+  const browserGpu = detectRealGPU();
   const ramInfo = detectRealRAM();
   const osInfo = detectRealOS();
 
-  // Try storage estimate
-  let storageStr = 'N/D';
-  if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.estimate) {
-    try {
-      const estimate = await navigator.storage.estimate();
-      if (estimate.quota) {
-        const totalGb = Math.round(estimate.quota / (1024 * 1024 * 1024));
-        if (totalGb > 0) {
-          storageStr = `${totalGb} GB Armazenamento Alocado (Navegador)`;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (
-    storageStr === 'N/D' &&
-    existingDevice?.storage &&
-    existingDevice.storage !== 'N/D' &&
-    !existingDevice.storage.includes('Kingston KC3000') &&
-    !existingDevice.storage.includes('512 GB SSD NVMe')
-  ) {
-    storageStr = existingDevice.storage;
-  }
-
-  // Real Ping test to local backend
+  // Teste de latência real com backend local
   let pingMs: number | null = null;
   try {
     const start = performance.now();
@@ -210,49 +194,66 @@ export async function detectFullComputerSpecs(existingDevice?: DeviceInfo): Prom
     pingMs = null;
   }
 
-  const cleanCpu =
-    existingDevice?.cpu &&
-    existingDevice.cpu !== 'N/D' &&
-    !existingDevice.cpu.includes('Ryzen 5 5600')
+  // Tentar detecção oficial de GPU via Electron IPC se disponível
+  let officialGpu = 'N/D';
+  if (typeof window !== 'undefined' && window.dyarte?.drivers?.detectGpuVendor) {
+    try {
+      const detection = await window.dyarte.drivers.detectGpuVendor();
+      if (detection?.gpuNames && detection.gpuNames.length > 0) {
+        officialGpu = detection.gpuNames.join(' / ');
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const chosenGpu =
+    officialGpu !== 'N/D'
+      ? officialGpu
+      : existingDevice?.gpu && existingDevice.gpu !== 'N/D'
+      ? existingDevice.gpu
+      : browserGpu;
+
+  const chosenCpu =
+    existingDevice?.cpu && existingDevice.cpu !== 'N/D'
       ? existingDevice.cpu
       : cpuInfo.name;
 
-  const cleanGpu =
-    existingDevice?.gpu &&
-    existingDevice.gpu !== 'N/D' &&
-    !existingDevice.gpu.includes('RTX 3060 12GB')
-      ? existingDevice.gpu
-      : realGpu;
-
-  const cleanRam =
-    existingDevice?.ram &&
-    existingDevice.ram !== 'N/D' &&
-    !existingDevice.ram.includes('2x8GB @ 3200MHz')
+  const chosenRam =
+    existingDevice?.ram && existingDevice.ram !== 'N/D'
       ? existingDevice.ram
       : ramInfo.formatted;
 
-  const cleanMotherboard =
-    existingDevice?.motherboard &&
-    existingDevice.motherboard !== 'N/D' &&
-    !existingDevice.motherboard.includes('ASUS TUF') &&
-    !existingDevice.motherboard.includes('Host')
-      ? existingDevice.motherboard
-      : 'N/D';
-
   return {
-    cpu: cleanCpu,
-    gpu: cleanGpu,
-    ram: cleanRam,
-    storage: storageStr,
-    motherboard: cleanMotherboard,
-    motherboard_chipset: existingDevice?.motherboard_chipset,
-    bios_version: existingDevice?.bios_version,
+    cpu: chosenCpu,
+    gpu: chosenGpu,
+    ram: chosenRam,
+    storage: existingDevice?.storage && existingDevice.storage !== 'N/D' ? existingDevice.storage : 'N/D',
+    motherboard: existingDevice?.motherboard && existingDevice.motherboard !== 'N/D' ? existingDevice.motherboard : 'N/D',
+    motherboard_chipset: existingDevice?.motherboard_chipset || undefined,
+    bios_version: existingDevice?.bios_version || undefined,
     resizable_bar: existingDevice?.resizable_bar ?? null,
     secure_boot: existingDevice?.secure_boot ?? null,
     xmp_profile: existingDevice?.xmp_profile ?? null,
     input_lag_ms: existingDevice?.input_lag_ms ?? null,
     ram_frequency: existingDevice?.ram_frequency ?? null,
     gpu_clock_mhz: existingDevice?.gpu_clock_mhz ?? null,
+    cpu_clock_mhz: existingDevice?.cpu_clock_mhz ?? null,
+    cpu_power_w: existingDevice?.cpu_power_w ?? null,
+    cpu_temperature: existingDevice?.cpu_temperature ?? null,
+    gpu_temperature: existingDevice?.gpu_temperature ?? null,
+    gpu_power_w: existingDevice?.gpu_power_w ?? null,
+    gpu_memory_used_mb: existingDevice?.gpu_memory_used_mb ?? null,
+    gpu_memory_total_mb: existingDevice?.gpu_memory_total_mb ?? null,
+    ram_used_mb: existingDevice?.ram_used_mb ?? null,
+    ram_total_mb: existingDevice?.ram_total_mb ?? null,
+    fps: existingDevice?.fps ?? null,
+    frametime_ms: existingDevice?.frametime_ms ?? null,
+    gpu_latency_ms: existingDevice?.gpu_latency_ms ?? null,
+    active_process: existingDevice?.active_process ?? null,
+    active_game_pid: existingDevice?.active_game_pid ?? null,
+    active_game_name: existingDevice?.active_game_name ?? null,
+    driver_version: existingDevice?.driver_version ?? null,
     windows_license: existingDevice?.windows_license ?? null,
     windows: existingDevice?.windows && existingDevice.windows !== 'N/D' ? existingDevice.windows : osInfo.name,
     windows_version: existingDevice?.windows_version && existingDevice.windows_version !== 'N/D' ? existingDevice.windows_version : osInfo.version,
