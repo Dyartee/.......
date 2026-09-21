@@ -237,21 +237,21 @@ export const DashboardView: React.FC = () => {
                 <span>CPU</span>
               </div>
               <span className="text-[11px] font-mono text-zinc-400">
-                {device.cpu.includes('Threads') ? device.cpu.split('(')[1]?.replace(')', '') || t('dash_hw_real') : t('dash_hw_boost')}
+                {device.cpu && device.cpu.includes('Threads') ? device.cpu.split('(')[1]?.replace(')', '') || t('dash_hw_real') : t('dash_hw_boost')}
               </span>
             </div>
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-2xl font-extrabold text-white font-mono">
-                {device.cpu_usage_pct}%
+                {device.cpu_usage_pct !== null ? `${device.cpu_usage_pct}%` : 'N/D'}
               </span>
               <span className="text-xs text-zinc-300 font-mono truncate max-w-[120px]" title={device.cpu}>
-                {device.cpu}
+                {device.cpu || 'N/D'}
               </span>
             </div>
             <div className="w-full h-1.5 bg-zinc-800 rounded-full mt-3 overflow-hidden">
               <div
                 className="h-full bg-[#E00000] rounded-full transition-all duration-500"
-                style={{ width: `${device.cpu_usage_pct}%` }}
+                style={{ width: `${device.cpu_usage_pct ?? 0}%` }}
               />
             </div>
           </div>
@@ -263,20 +263,22 @@ export const DashboardView: React.FC = () => {
                 <Activity className="w-4 h-4 text-rose-400" />
                 <span>GPU</span>
               </div>
-              <span className="text-xs font-mono text-zinc-400">{device.temp_c}°C</span>
+              <span className="text-xs font-mono text-zinc-400">
+                {device.temp_c !== null ? `${device.temp_c}°C` : 'N/D'}
+              </span>
             </div>
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-2xl font-extrabold text-white font-mono">
-                {device.gpu_usage_pct}%
+                {device.gpu_usage_pct !== null ? `${device.gpu_usage_pct}%` : 'N/D'}
               </span>
               <span className="text-xs text-zinc-300 font-mono truncate max-w-[120px]" title={device.gpu}>
-                {device.gpu}
+                {device.gpu || 'N/D'}
               </span>
             </div>
             <div className="w-full h-1.5 bg-zinc-800 rounded-full mt-3 overflow-hidden">
               <div
                 className="h-full bg-rose-500 rounded-full transition-all duration-500"
-                style={{ width: `${device.gpu_usage_pct}%` }}
+                style={{ width: `${device.gpu_usage_pct ?? 0}%` }}
               />
             </div>
           </div>
@@ -289,47 +291,47 @@ export const DashboardView: React.FC = () => {
                 <span>RAM</span>
               </div>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/50 text-amber-300 border border-amber-800/40">
-                {device.ram_frequency || '3600 MHz'}
+                {device.ram_frequency || 'N/D'}
               </span>
             </div>
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-2xl font-extrabold text-white font-mono">
-                {device.ram_usage_pct}%
+                {device.ram_usage_pct !== null ? `${device.ram_usage_pct}%` : 'N/D'}
               </span>
               <span className="text-xs text-zinc-300 font-mono truncate max-w-[120px]" title={device.ram}>
-                {device.ram}
+                {device.ram || 'N/D'}
               </span>
             </div>
             <div className="w-full h-1.5 bg-zinc-800 rounded-full mt-3 overflow-hidden">
               <div
                 className="h-full bg-amber-500 rounded-full transition-all duration-500"
-                style={{ width: `${device.ram_usage_pct}%` }}
+                style={{ width: `${device.ram_usage_pct ?? 0}%` }}
               />
             </div>
           </div>
 
-          {/* PLACA-MÃE (DETECÇÃO DA PLACA-MÃE MOVIDA PARA O DASHBOARD) */}
+          {/* PLACA-MÃE */}
           <div className="p-4 rounded-xl bg-[#121217] border border-purple-900/30 flex flex-col justify-between hover:border-purple-600/50 transition-all group relative overflow-hidden">
             <div className="flex items-center justify-between text-zinc-400 mb-2">
               <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-purple-300">
                 <Server className="w-4 h-4 text-purple-400" />
                 <span>PLACA-MÃE</span>
               </div>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-600/40 text-emerald-300 font-bold">
-                {device.resizable_bar || 'ReBAR OK'}
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-zinc-300 font-bold">
+                {device.resizable_bar === true ? 'ReBAR Ativo' : (device.resizable_bar === false ? 'ReBAR Desativado' : 'ReBAR N/D')}
               </span>
             </div>
             <div className="space-y-0.5">
               <h4 className="text-sm font-bold text-white font-mono truncate" title={device.motherboard}>
-                {device.motherboard}
+                {device.motherboard || 'N/D'}
               </h4>
               <p className="text-[11px] text-zinc-400 font-mono truncate" title={device.motherboard_chipset}>
-                {device.motherboard_chipset || 'Chipset B550 / PCIe 4.0'}
+                {device.motherboard_chipset || 'Chipset: N/D'}
               </p>
             </div>
             <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mt-2.5 pt-2 border-t border-zinc-800/80">
-              <span>BIOS: {device.bios_version || 'v3202 UEFI'}</span>
-              <span className="text-purple-400 font-semibold">100% Detectada</span>
+              <span>BIOS: {device.bios_version || 'N/D'}</span>
+              <span className="text-zinc-500 font-semibold">{device.motherboard && device.motherboard !== 'N/D' ? 'Detectada' : 'Aguardando'}</span>
             </div>
           </div>
 
@@ -344,14 +346,14 @@ export const DashboardView: React.FC = () => {
             </div>
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-sm font-bold text-white font-mono truncate max-w-[110px]">
-                {device.windows}
+                {device.windows || 'Windows'}
               </span>
               <span className="text-xs text-zinc-400 font-mono truncate">
-                {device.windows_version}
+                {device.windows_version || 'N/D'}
               </span>
             </div>
             <div className="text-[11px] text-zinc-500 font-mono mt-3 truncate" title={device.build}>
-              {device.build}
+              {device.build || 'Build N/D'}
             </div>
           </div>
         </div>

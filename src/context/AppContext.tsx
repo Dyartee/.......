@@ -735,28 +735,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // Phase 4: Concluído com sucesso (Instalação iniciada)
+    // Phase 4: Instalador disparado (AGUARDANDO CONCLUSÃO DO ASSISTENTE)
     const successMsg =
-      execResult.message || `Instalador do driver ${brand} iniciado com sucesso no Windows!`;
+      execResult.message || `Instalador do driver ${brand} iniciado no Windows. Conclua no assistente da GPU.`;
     setDriverPipeline((prev) =>
       prev
         ? {
             ...prev,
             phase: 'completed',
             progress: 100,
-            actionText: 'Instalação iniciada com sucesso!',
+            actionText: 'Instalador aberto no Windows — aguardando conclusão do usuário.',
             successMessage: successMsg,
             logs: [
               ...prev.logs,
-              `[PROCESSO INICIADO] O executável ${installerInfo.fileName} está rodando no Windows.`,
-              `[UAC] Conclua as instruções na tela do assistente do driver.`,
-              `[CONCLUÍDO] Rotina disparada com êxito pelo DYARTE OPTIMIZER.`,
+              `[PROCESSO DISPARADO] Executável ${installerInfo.fileName} iniciado com privilégios de Administrador.`,
+              `[STATUS] INSTALLER_LAUNCHED (Aguardando conclusão manual no assistente da ${brand}).`,
+              `[AVISO] A instalação física do driver ocorre fora do aplicativo, no instalador oficial.`,
             ],
           }
         : null
     );
 
-    // Registra no histórico real
+    // Registra no histórico real com status PENDENTE (nunca sucesso prematuro antes de concluir)
     const historyItem: OptimizationHistoryItem = {
       history_id: `hist_${Date.now()}`,
       user_id: currentUser.user_id,
@@ -766,14 +766,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date:
         'Hoje às ' +
         new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      status: 'SUCESSO',
-      result: `Instalador ${installerInfo.fileName} iniciado com privilégios de Administrador.`,
+      status: 'PENDENTE',
+      result: `INSTALLER_LAUNCHED: Instalador ${installerInfo.fileName} aberto via UAC. Aguardando conclusão do usuário.`,
       duration_ms: 2100,
       details: `Executável do driver ${brand} localizado em ${installerInfo.fullPath} e executado via UAC.`,
     };
     setHistory((prev) => [historyItem, ...prev]);
 
-    addToast('success', 'Driver Iniciado', `Instalador do driver ${brand} foi iniciado com sucesso.`);
+    addToast('info', 'Instalador Aberto', `Instalador do driver ${brand} iniciado. Conclua as etapas no assistente.`);
   };
 
   // Monitor plan expiration: if expired and safety lock active, trigger automatic factory reset
@@ -967,76 +967,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setLegalModal((prev) => ({ ...prev, isOpen: false }));
   };
 
-  // Web Synchronization Operations
+  // Web Synchronization Operations - Sincronização real com Firebase Firestore
   const syncWithWebsite = async (targetEmail?: string): Promise<{ success: boolean; message: string }> => {
     setIsSyncingWithWeb(true);
-    const emailToSync = (targetEmail || currentUser?.email || '').trim().toLowerCase();
-
-    // Simula consulta em tempo real aos servidores de dyarte.com
-    await new Promise((r) => setTimeout(r, 600));
 
     const now = new Date();
     const timeStr = `Hoje às ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
     setLastWebSync(timeStr);
     localStorage.setItem('dyarte_last_sync', timeStr);
 
-    if (!emailToSync) {
-      setIsSyncingWithWeb(false);
-      return { success: false, message: 'Nenhuma conta informada para sincronizar.' };
-    }
-
-    const matched = users.find((u) => u.email.toLowerCase() === emailToSync);
-    if (matched) {
-      const refreshedUser: User = {
-        ...matched,
-        ultimo_login: `Sincronizado ${timeStr}`,
-      };
-      if (currentUser?.user_id === matched.user_id) {
-        setCurrentUser(refreshedUser);
+    try {
+      const fbUser = auth.currentUser;
+      if (!fbUser) {
+        setIsSyncingWithWeb(false);
+        addToast('info', 'Sincronização', 'Faça login com sua conta para sincronizar o plano em tempo real.');
+        return { success: false, message: 'Nenhuma sessão autenticada para sincronização.' };
       }
-      setUsers((prev) => prev.map((u) => (u.user_id === matched.user_id ? refreshedUser : u)));
-      setIsSyncingWithWeb(false);
-      addToast(
-        'success',
-        'Conta Sincronizada',
-        `Plano ${refreshedUser.plano_atual || 'SEM PLANO'} e status atualizados em tempo real do site oficial.`
-      );
-      return { success: true, message: 'Dados sincronizados com sucesso!' };
-    }
 
-    setIsSyncingWithWeb(false);
-    return { success: false, message: 'Conta não localizada nos servidores do site.' };
+      const userRef = doc(db, 'users', fbUser.uid);
+      const snap = await getDoc(userRef);
+
+      if (snap.exists()) {
+        const userData = snap.data() as User;
+        const refreshedUser: User = {
+          ...userData,
+          ultimo_login: `Sincronizado ${timeStr}`,
+        };
+        setCurrentUser(refreshedUser);
+        setUsers((prev) => prev.map((u) => (u.user_id === refreshedUser.user_id ? refreshedUser : u)));
+        setIsSyncingWithWeb(false);
+        addToast(
+          'success',
+          'Conta Sincronizada',
+          `Plano ${refreshedUser.plano_atual || 'SEM PLANO'} atualizado diretamente do banco de dados.`
+        );
+        return { success: true, message: 'Dados sincronizados com o servidor.' };
+      } else {
+        setIsSyncingWithWeb(false);
+        return { success: false, message: 'Cadastro do usuário não encontrado na base de dados.' };
+      }
+    } catch (err: any) {
+      setIsSyncingWithWeb(false);
+      return { success: false, message: `Erro ao conectar com servidor: ${err.message || 'Falha de rede'}` };
+    }
   };
 
   const webBrowserLoginSync = async (): Promise<{ success: boolean; error?: string }> => {
     setIsSyncingWithWeb(true);
-    // Simula detecção de sessão autenticada ativa no navegador em dyarte.com
-    await new Promise((r) => setTimeout(r, 800));
-
-    // Usuário padrão ou o primeiro da lista
-    const userToLogin = users.find((u) => u.email === 'kelberduarte22@gmail.com') || users[0];
-    if (userToLogin) {
-      const now = new Date();
-      const timeStr = `Hoje às ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-      setLastWebSync(timeStr);
-      localStorage.setItem('dyarte_last_sync', timeStr);
-
-      const updatedUser: User = {
-        ...userToLogin,
-        ultimo_login: `Sessão Web Sincronizada ${timeStr}`,
-      };
-      setUsers((prev) => prev.map((u) => (u.user_id === userToLogin.user_id ? updatedUser : u)));
-      setCurrentUser(updatedUser);
-      setIsSyncingWithWeb(false);
-      addToast(
-        'success',
-        'Sincronização Web Concluída',
-        `Conectado com sucesso via sessão web de ${updatedUser.nome}! Plano sincronizado com o site.`
-      );
-      return { success: true };
-    }
+    // Sincronização direta de navegador web requer fluxo real de autenticação OAuth ou extensão
     setIsSyncingWithWeb(false);
-    return { success: false, error: 'Nenhuma sessão do site encontrada no navegador.' };
+    return {
+      success: false,
+      error: 'Autenticação de sessão de navegador requer login direto via e-mail e senha ou Google.',
+    };
   };
 
   // Firebase Auth Real-Time State Listener
@@ -1620,14 +1603,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await executeDriverPipeline('AMD');
       setIsOptimizing(false);
       setActiveOptimizingToolId(null);
-      return { success: true, message: 'Driver AMD baixado, extraído e executado com sucesso.' };
+      return { success: true, message: 'Instalador do driver AMD iniciado no Windows. Conclua no assistente.' };
     }
 
     if (toolId === 'tool_gpu_nvidia_driver' || toolId === 'tool_gpu_nvidia_opt') {
       await executeDriverPipeline('NVIDIA');
       setIsOptimizing(false);
       setActiveOptimizingToolId(null);
-      return { success: true, message: 'Driver NVIDIA baixado, extraído e executado com sucesso.' };
+      return { success: true, message: 'Instalador do driver NVIDIA iniciado no Windows. Conclua no assistente.' };
     }
 
     // Execution via real OptimizationEngine linked to DYARTE Agent

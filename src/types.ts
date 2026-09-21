@@ -115,6 +115,9 @@ export interface DeviceInfo {
   secure_boot?: boolean | null;
   xmp_profile?: string | null;
   input_lag_ms?: number | null;
+  ram_frequency?: string | null;
+  gpu_clock_mhz?: number | null;
+  windows_license?: string | null;
   windows: string;
   windows_version: string;
   build: string;

@@ -124,7 +124,9 @@ export const ComputerView: React.FC = () => {
           </div>
           <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs font-mono">
             <span className="text-zinc-500">{t('comp_usage_current')}</span>
-            <span className="text-white font-bold">{device.cpu_usage_pct}%</span>
+            <span className="text-white font-bold">
+              {device.cpu_usage_pct !== null ? `${device.cpu_usage_pct}%` : 'N/D'}
+            </span>
           </div>
         </div>
 
@@ -138,7 +140,7 @@ export const ComputerView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-bold text-white font-mono leading-snug">
-              {device.gpu}
+              {device.gpu || 'N/D'}
             </h3>
             <p className="text-xs text-zinc-400 mt-1">
               {t('comp_gpu_sub')}
@@ -147,7 +149,7 @@ export const ComputerView: React.FC = () => {
           <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs font-mono">
             <span className="text-zinc-500">{t('comp_gpu_temp_load')}</span>
             <span className="text-white font-bold">
-              {device.temp_c}°C / {device.gpu_usage_pct}%
+              {device.temp_c !== null ? `${device.temp_c}°C` : 'N/D'} / {device.gpu_usage_pct !== null ? `${device.gpu_usage_pct}%` : 'N/D'}
             </span>
           </div>
         </div>
@@ -162,7 +164,7 @@ export const ComputerView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-bold text-white font-mono leading-snug">
-              {device.ram}
+              {device.ram || 'N/D'}
             </h3>
             <p className="text-xs text-zinc-400 mt-1">
               {t('comp_ram_sub')}
@@ -170,7 +172,9 @@ export const ComputerView: React.FC = () => {
           </div>
           <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs font-mono">
             <span className="text-zinc-500">{t('comp_in_use')}</span>
-            <span className="text-white font-bold">{device.ram_usage_pct}%</span>
+            <span className="text-white font-bold">
+              {device.ram_usage_pct !== null ? `${device.ram_usage_pct}%` : 'N/D'}
+            </span>
           </div>
         </div>
 
@@ -184,7 +188,7 @@ export const ComputerView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-bold text-white font-mono leading-snug">
-              {device.storage}
+              {device.storage || 'N/D'}
             </h3>
             <p className="text-xs text-zinc-400 mt-1">
               {t('comp_storage_sub')}
@@ -206,15 +210,17 @@ export const ComputerView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-bold text-white font-mono leading-snug">
-              {device.motherboard}
+              {device.motherboard || 'N/D'}
             </h3>
             <p className="text-xs text-zinc-400 mt-1">
-              {t('comp_motherboard_sub')}
+              {device.motherboard_chipset || t('comp_motherboard_sub')}
             </p>
           </div>
           <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs font-mono">
             <span className="text-zinc-500">{t('comp_resizable_bar')}</span>
-            <span className="text-emerald-400 font-bold">{t('comp_enabled')}</span>
+            <span className="font-bold text-zinc-300">
+              {device.resizable_bar === true ? 'Ativado' : (device.resizable_bar === false ? 'Desativado' : 'N/D')}
+            </span>
           </div>
         </div>
 
@@ -228,15 +234,17 @@ export const ComputerView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-bold text-white font-mono leading-snug">
-              {device.windows}
+              {device.windows || 'Windows'}
             </h3>
             <p className="text-xs text-zinc-400 mt-1">
-              {t('comp_os_sub_prefix')} {device.windows_version} • {device.build}
+              {t('comp_os_sub_prefix')} {device.windows_version || 'N/D'} • {device.build || 'N/D'}
             </p>
           </div>
           <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs font-mono">
             <span className="text-zinc-500">{t('comp_win_license')}</span>
-            <span className="text-emerald-400 font-bold">{t('comp_win_original')}</span>
+            <span className="font-bold text-zinc-300">
+              {device.windows_license || 'N/D'}
+            </span>
           </div>
         </div>
       </div>
@@ -296,8 +304,14 @@ export const ComputerView: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-zinc-400 mt-0.5">
-                {t('comp_agent_installed_ver')} <span className="font-mono text-zinc-200">{device.agent_version}</span>{' '}
-                • {t('comp_agent_last_heartbeat')} <span className="font-mono text-zinc-200">{device.last_heartbeat}</span>
+                {t('comp_agent_installed_ver')}{' '}
+                <span className="font-mono text-zinc-200">
+                  {device.is_agent_connected && device.agent_version ? device.agent_version : 'N/D'}
+                </span>{' '}
+                • {t('comp_agent_last_heartbeat')}{' '}
+                <span className="font-mono text-zinc-200">
+                  {device.is_agent_connected && device.last_heartbeat ? device.last_heartbeat : 'N/D'}
+                </span>
               </p>
             </div>
           </div>
