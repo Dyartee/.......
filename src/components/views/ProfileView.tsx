@@ -129,25 +129,23 @@ export const ProfileView: React.FC = () => {
 
           <div className="p-3.5 rounded-xl bg-[#0d0d12] border border-[#1f1f2a]">
             <span className="text-[10px] text-zinc-500 uppercase block mb-1">PLANO ATUAL</span>
-            <span className={(currentUser?.nivel_plano ?? 0) === 0 ? 'text-amber-400 font-bold' : 'text-[#FF4444] font-bold'}>
-              {(currentUser?.nivel_plano ?? 0) === 0
-                ? 'SEM PLANO (MODO VISUALIZAÇÃO)'
-                : `${currentUser?.plano_atual} (Nível ${currentUser?.nivel_plano})`}
+            <span className="text-[#FF4444] font-bold">
+              {`${currentUser?.plano_atual || 'BÁSICO'} (Nível ${currentUser?.nivel_plano || 1})`}
             </span>
           </div>
 
           <div className="p-3.5 rounded-xl bg-[#0d0d12] border border-[#1f1f2a]">
             <span className="text-[10px] text-zinc-500 uppercase block mb-1">STATUS DO PLANO</span>
-            <span className={(currentUser?.nivel_plano ?? 0) === 0 ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
-              ● {currentUser?.status_plano === 'SEM_PLANO' ? 'SEM PLANO' : currentUser?.status_plano}
+            <span className="text-emerald-400 font-bold">
+              ● {currentUser?.status_plano || 'ATIVO'}
             </span>
           </div>
 
           <div className="p-3.5 rounded-xl bg-[#0d0d12] border border-[#1f1f2a]">
             <span className="text-[10px] text-zinc-500 uppercase block mb-1">VIGÊNCIA</span>
             <span className="text-zinc-300">
-              {(currentUser?.nivel_plano ?? 0) === 0
-                ? 'Aguardando aquisição'
+              {(currentUser?.nivel_plano ?? 1) === 1
+                ? 'Vitalício (Gratuito)'
                 : `${currentUser?.data_inicio} até ${currentUser?.data_expiracao}`}
             </span>
           </div>
@@ -155,14 +153,14 @@ export const ProfileView: React.FC = () => {
           <div className="p-3.5 rounded-xl bg-[#0d0d12] border border-[#1f1f2a]">
             <span className="text-[10px] text-zinc-500 uppercase block mb-1">ID DA LICENÇA</span>
             <span className="text-zinc-300 truncate block">
-              {currentUser?.license_id || 'Nenhuma licença vinculada'}
+              {currentUser?.license_id || 'Licença Gratuita Básica'}
             </span>
           </div>
 
           <div className="p-3.5 rounded-xl bg-[#0d0d12] border border-[#1f1f2a]">
             <span className="text-[10px] text-zinc-500 uppercase block mb-1">STATUS DA LICENÇA</span>
-            <span className={(currentUser?.nivel_plano ?? 0) === 0 ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
-              {(currentUser?.nivel_plano ?? 0) === 0 ? 'SEM LICENÇA' : currentUser?.status_licenca}
+            <span className="text-emerald-400 font-bold">
+              {currentUser?.status_licenca || 'ATIVA'}
             </span>
           </div>
 

@@ -25,6 +25,8 @@ enum class MessageType {
     PONG,
     TEST_CONNECTION,
     TEST_CONNECTION_RESULT,
+    GET_STATUS,
+    STATUS_RESULT,
     APPLY_OPTIMIZATION,
     ROLLBACK_OPTIMIZATION,
     OPTIMIZATION_RESULT,
@@ -42,6 +44,8 @@ inline std::string MessageTypeToString(MessageType type) {
         case MessageType::PONG: return "PONG";
         case MessageType::TEST_CONNECTION: return "TEST_CONNECTION";
         case MessageType::TEST_CONNECTION_RESULT: return "TEST_CONNECTION_RESULT";
+        case MessageType::GET_STATUS: return "GET_STATUS";
+        case MessageType::STATUS_RESULT: return "STATUS_RESULT";
         case MessageType::APPLY_OPTIMIZATION: return "APPLY_OPTIMIZATION";
         case MessageType::ROLLBACK_OPTIMIZATION: return "ROLLBACK_OPTIMIZATION";
         case MessageType::OPTIMIZATION_RESULT: return "OPTIMIZATION_RESULT";
@@ -57,6 +61,7 @@ inline MessageType StringToMessageType(const std::string& str) {
     if (str == "HANDSHAKE") return MessageType::HANDSHAKE;
     if (str == "PING") return MessageType::PING;
     if (str == "TEST_CONNECTION") return MessageType::TEST_CONNECTION;
+    if (str == "GET_STATUS") return MessageType::GET_STATUS;
     if (str == "APPLY_OPTIMIZATION") return MessageType::APPLY_OPTIMIZATION;
     if (str == "ROLLBACK_OPTIMIZATION") return MessageType::ROLLBACK_OPTIMIZATION;
     if (str == "GET_TELEMETRY") return MessageType::GET_TELEMETRY;
@@ -128,6 +133,116 @@ public:
            << ",\"status\":\"" << EscapeString(status) << "\""
            << ",\"success\":" << (success ? "true" : "false")
            << ",\"message\":\"" << EscapeString(message) << "\"}";
+        return ss.str();
+    }
+
+    static std::string BuildOptimizationAuditResult(
+        const std::string& requestId,
+        const std::string& toolId,
+        const std::string& state,
+        bool success,
+        bool verified,
+        const std::string& beforeStateJson,
+        const std::string& afterStateJson,
+        bool rollbackAvailable,
+        int64_t durationMs,
+        const std::string& errorMsg = "",
+        const std::string& message = ""
+    ) {
+        std::stringstream ss;
+        ss << "{\"protocol_version\":1"
+           << ",\"type\":\"OPTIMIZATION_RESULT\""
+           << ",\"request_id\":\"" << EscapeString(requestId) << "\""
+           << ",\"optimization_id\":\"opt_rec_" << EscapeString(requestId) << "\""
+           << ",\"tool_id\":\"" << EscapeString(toolId) << "\""
+           << ",\"state\":\"" << EscapeString(state) << "\""
+           << ",\"success\":" << (success ? "true" : "false")
+           << ",\"verified\":" << (verified ? "true" : "false")
+           << ",\"before_state\":" << (beforeStateJson.empty() ? "{}" : beforeStateJson)
+           << ",\"after_state\":" << (afterStateJson.empty() ? "{}" : afterStateJson)
+           << ",\"rollback_available\":" << (rollbackAvailable ? "true" : "false")
+           << ",\"duration_ms\":" << durationMs
+           << ",\"agent_version\":\"" << ProtocolConstants::AGENT_VERSION << "\"";
+        if (!errorMsg.empty()) {
+            ss << ",\"error\":\"" << EscapeString(errorMsg) << "\"";
+        } else {
+            ss << ",\"error\":null";
+        }
+        if (!message.empty()) {
+            ss << ",\"message\":\"" << EscapeString(message) << "\"";
+        }
+        ss << "}";
+        return ss.str();
+    }
+
+    static std::string BuildStatusResult(
+        const std::string& requestId,
+        const std::string& osName,
+        bool isWindows,
+        const std::string& activePowerSchemeGuid,
+        const std::string& activePowerSchemeName,
+        const std::string& deviceId = "",
+        const std::string& cpu = "",
+        const std::string& gpu = "",
+        const std::string& ram = "",
+        const std::string& storage = "",
+        const std::string& motherboard = "",
+        const std::string& biosVersion = "",
+        bool secureBoot = false
+    ) {
+        std::stringstream ss;
+        ss << "{\"protocol_version\":1"
+           << ",\"type\":\"STATUS_RESULT\""
+           << ",\"request_id\":\"" << EscapeString(requestId) << "\""
+           << ",\"agent_version\":\"" << ProtocolConstants::AGENT_VERSION << "\""
+           << ",\"status\":\"ONLINE\""
+           << ",\"os\":\"" << EscapeString(osName) << "\""
+           << ",\"is_windows\":" << (isWindows ? "true" : "false")
+           << ",\"power_scheme\":{"
+           << "\"guid\":\"" << EscapeString(activePowerSchemeGuid) << "\""
+           << ",\"name\":\"" << EscapeString(activePowerSchemeName) << "\""
+           << "}";
+        if (!deviceId.empty()) ss << ",\"device_id\":\"" << EscapeString(deviceId) << "\"";
+        if (!cpu.empty()) ss << ",\"cpu\":\"" << EscapeString(cpu) << "\"";
+        if (!gpu.empty()) ss << ",\"gpu\":\"" << EscapeString(gpu) << "\"";
+        if (!ram.empty()) ss << ",\"ram\":\"" << EscapeString(ram) << "\"";
+        if (!storage.empty()) ss << ",\"storage\":\"" << EscapeString(storage) << "\"";
+        if (!motherboard.empty()) ss << ",\"motherboard\":\"" << EscapeString(motherboard) << "\"";
+        if (!biosVersion.empty()) ss << ",\"bios_version\":\"" << EscapeString(biosVersion) << "\"";
+        ss << ",\"secure_boot\":" << (secureBoot ? "true" : "false");
+        ss << "}";
+        return ss.str();
+    }
+
+    static std::string BuildTelemetrySnapshot(
+        const std::string& requestId,
+        const std::string& cpuUsageStr = "null",
+        const std::string& gpuUsageStr = "null",
+        const std::string& ramUsageStr = "null",
+        const std::string& cpuTempStr = "null",
+        const std::string& gpuTempStr = "null",
+        const std::string& cpuClockStr = "null",
+        const std::string& gpuClockStr = "null",
+        const std::string& ramUsedMbStr = "null",
+        const std::string& ramTotalMbStr = "null"
+    ) {
+        std::stringstream ss;
+        ss << "{\"protocol_version\":1"
+           << ",\"type\":\"TELEMETRY_SNAPSHOT\""
+           << ",\"request_id\":\"" << EscapeString(requestId) << "\""
+           << ",\"agent_version\":\"" << ProtocolConstants::AGENT_VERSION << "\""
+           << ",\"cpu_usage\":" << cpuUsageStr
+           << ",\"gpu_usage\":" << gpuUsageStr
+           << ",\"ram_usage\":" << ramUsageStr
+           << ",\"cpu_temp\":" << cpuTempStr
+           << ",\"gpu_temp\":" << gpuTempStr
+           << ",\"cpu_clock_mhz\":" << cpuClockStr
+           << ",\"gpu_clock_mhz\":" << gpuClockStr
+           << ",\"data\":{"
+           << "\"cpu\":{\"usage\":" << cpuUsageStr << ",\"temperature\":" << cpuTempStr << ",\"clock_mhz\":" << cpuClockStr << "}"
+           << ",\"gpu\":{\"usage\":" << gpuUsageStr << ",\"temperature\":" << gpuTempStr << ",\"clock_mhz\":" << gpuClockStr << "}"
+           << ",\"memory\":{\"usage\":" << ramUsageStr << ",\"used_mb\":" << ramUsedMbStr << ",\"total_mb\":" << ramTotalMbStr << "}"
+           << "}}";
         return ss.str();
     }
 

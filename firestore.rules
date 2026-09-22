@@ -27,6 +27,10 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidPlanLevel(level) {
+      return level is int && level >= 1 && level <= 4;
+    }
+
     // Users Collection
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
@@ -37,12 +41,12 @@ service cloud.firestore {
           request.resource.data.role == 'USER' &&
           request.resource.data.nivel_plano == 1 &&
           request.resource.data.status_plano == 'ATIVO' &&
-          (!('status_licenca' in request.resource.data) || request.resource.data.status_licenca in ['INATIVA', 'PENDENTE', 'SEM_LICENCA']) &&
+          (!('status_licenca' in request.resource.data) || request.resource.data.status_licenca in ['INATIVA', 'PENDENTE', 'SEM_LICENCA', 'ATIVA']) &&
           (!('license_id' in request.resource.data) || request.resource.data.license_id == null || request.resource.data.license_id == '')
         ) ||
-        isAdmin()
+        (isAdmin() && isValidPlanLevel(request.resource.data.nivel_plano))
       );
-      allow update: if isAdmin() || (
+      allow update: if (isAdmin() && (!('nivel_plano' in request.resource.data) || isValidPlanLevel(request.resource.data.nivel_plano))) || (
         isOwner(userId) &&
         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
           'role',

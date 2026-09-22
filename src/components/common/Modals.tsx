@@ -49,16 +49,6 @@ export const Modals: React.FC = () => {
       window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
     };
 
-    const handleInstantSimulation = () => {
-      adminProcessWebhookPayment({
-        email: currentUser?.email || 'cliente@email.com',
-        plan_id: targetPlan.id,
-        transaction_id: `TX-UPGRADE-${Math.floor(100000 + Math.random() * 900000)}`,
-        amount: targetPlan.price,
-      });
-      closeUpgradeModal();
-    };
-
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
         <div className="w-full max-w-lg rounded-2xl bg-[#121219] border-2 border-[#E00000] p-6 shadow-[0_0_50px_rgba(224,0,0,0.3)] space-y-5 relative">
@@ -114,21 +104,13 @@ export const Modals: React.FC = () => {
             </div>
           </div>
 
-          <div className="space-y-2 pt-2">
+          <div className="pt-2">
             <button
               onClick={handleExternalCheckout}
               className="w-full py-3 rounded-xl bg-[#E00000] hover:bg-[#c50000] text-white text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg"
             >
               <span>Comprar Agora no Site Oficial</span>
               <ExternalLink className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={handleInstantSimulation}
-              className="w-full py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-mono transition-colors flex items-center justify-center gap-1.5 cursor-pointer border border-zinc-700"
-            >
-              <Zap className="w-3.5 h-3.5 text-amber-400" />
-              <span>Simular Ativação Imediata (Ambiente de Teste)</span>
             </button>
           </div>
         </div>

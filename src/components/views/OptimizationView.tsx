@@ -85,7 +85,7 @@ export const OptimizationView: React.FC = () => {
     };
   }, [device?.gpu]);
 
-  const userPlanLevel = currentUser?.nivel_plano ?? 0;
+  const userPlanLevel = currentUser?.nivel_plano ?? 1;
 
   const isAmdGpuDetected = detectedGpuVendor === 'AMD';
   const isNvidiaGpuDetected = detectedGpuVendor === 'NVIDIA';
@@ -133,15 +133,9 @@ export const OptimizationView: React.FC = () => {
             <h1 className="text-2xl font-bold tracking-tight text-white font-mono uppercase">
               {t('opt_title')}
             </h1>
-            {userPlanLevel === 0 ? (
-              <span className="px-2.5 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-400 border border-amber-500/40 font-bold flex items-center gap-1">
-                <Eye className="w-3 h-3" /> {t('opt_view_mode_badge')}
-              </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#E00000]/20 text-[#FF4444] border border-[#E00000]/40 font-bold">
-                {t('opt_level_active').replace('{level}', userPlanLevel.toString())}
-              </span>
-            )}
+            <span className="px-2.5 py-0.5 rounded text-[10px] font-mono bg-[#E00000]/20 text-[#FF4444] border border-[#E00000]/40 font-bold">
+              {userPlanLevel === 1 ? 'PLANO BÁSICO (GRATUITO)' : t('opt_level_active').replace('{level}', userPlanLevel.toString())}
+            </span>
           </div>
           <p className="text-sm text-zinc-400 mt-1">
             {t('opt_subtitle')}
@@ -153,41 +147,11 @@ export const OptimizationView: React.FC = () => {
             onClick={() => setCurrentView('plans')}
             className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-mono text-zinc-200 border border-zinc-700 flex items-center gap-2 transition-all cursor-pointer"
           >
-            <span>{userPlanLevel === 0 ? t('opt_acquire_plan') : t('opt_upgrade_plan')}</span>
+            <span>{t('opt_upgrade_plan')}</span>
             <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />
           </button>
         </div>
       </div>
-
-      {/* Visualization Mode Notice Banner */}
-      {userPlanLevel === 0 && (
-        <div className="p-4 rounded-xl bg-gradient-to-r from-[#171207] via-[#14141d] to-[#0f0f15] border border-amber-500/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
-              <Eye className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono font-bold uppercase text-amber-400">
-                  {t('plan_view_mode')}
-                </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 border border-amber-700/50 text-amber-300 font-semibold">
-                  {t('plan_no_plan')}
-                </span>
-              </div>
-              <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
-                {t('dash_view_only_desc')} - {t('plans_subtitle')}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => setCurrentView('plans')}
-            className="px-4 py-2 rounded-lg bg-[#E00000] hover:bg-[#c50000] text-white text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shadow-md shrink-0"
-          >
-            {t('dash_view_plans_web')}
-          </button>
-        </div>
-      )}
 
       {/* Category Pills and Filter Row */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-2 rounded-xl bg-[#111117] border border-[#20202c]">

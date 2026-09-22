@@ -10,13 +10,56 @@ import {
   OptimizationToolState,
 } from './telemetryTypes';
 
+let globalRequestSeq = 0;
+function generateRequestId(prefix: string): string {
+  globalRequestSeq = (globalRequestSeq + 1) % 1000000;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  }
+  return `${prefix}_${Date.now()}_${globalRequestSeq}`;
+}
+
+export interface AgentOptimizationResponse {
+  success: boolean;
+  state: OptimizationToolState;
+  verified?: boolean;
+  before_state?: any;
+  after_state?: any;
+  rollback_available?: boolean;
+  duration_ms?: number;
+  message?: string;
+  error?: string;
+  optimization_id?: string;
+}
+
+export interface AgentStatusResponse {
+  success: boolean;
+  status: 'ONLINE' | 'OFFLINE';
+  os?: string;
+  is_windows?: boolean;
+  power_scheme?: {
+    guid: string;
+    name: string;
+  };
+  device_id?: string;
+  cpu?: string;
+  gpu?: string;
+  ram?: string;
+  storage?: string;
+  motherboard?: string;
+  bios_version?: string;
+  secure_boot?: boolean;
+  error?: string;
+}
+
 export type AgentMessageListener = (snapshot: TelemetrySnapshot) => void;
 export type AgentStateListener = (state: AgentConnectionState) => void;
 
 interface PendingRequest {
-  resolve: (response: any) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
+  resolve: (data: any) => void;
+  reject: (err: Error) => void;
+  timer: any;
+  command?: string;
 }
 
 class AgentBridgeService {
@@ -216,8 +259,7 @@ class AgentBridgeService {
       };
     }
 
-    const requestId =
-      customRequestId || `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const requestId = customRequestId || generateRequestId('req');
 
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -260,6 +302,108 @@ class AgentBridgeService {
   }
 
   /**
+   * Consulta status e dados básicos do Windows Agent
+   */
+  public async getStatus(timeoutMs: number = 5000): Promise<AgentStatusResponse> {
+    if (this.connectionState !== 'AGENT_ONLINE' || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return {
+        success: false,
+        status: 'OFFLINE',
+        error: 'Agente offline. Inicie o dyarte-agent.exe em 127.0.0.1:49152 para conectar.',
+      };
+    }
+
+    const requestId = generateRequestId('status');
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        resolve({
+          success: false,
+          status: 'OFFLINE',
+          error: 'Tempo limite esgotado aguardando STATUS_RESULT do agente.',
+        });
+      }, timeoutMs);
+
+      this.pendingRequests.set(requestId, {
+        resolve: (resp) => {
+          clearTimeout(timer);
+          if (resp.type === 'STATUS_RESULT') {
+            resolve({
+              success: true,
+              status: 'ONLINE',
+              os: resp.os,
+              is_windows: resp.is_windows,
+              power_scheme: resp.power_scheme,
+              device_id: resp.device_id,
+              cpu: resp.cpu,
+              gpu: resp.gpu,
+              ram: resp.ram,
+              storage: resp.storage,
+              motherboard: resp.motherboard,
+              bios_version: resp.bios_version,
+              secure_boot: resp.secure_boot,
+            });
+          } else {
+            resolve({
+              success: false,
+              status: 'OFFLINE',
+              error: resp.error || 'Resposta inesperada do agente.',
+            });
+          }
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          resolve({ success: false, status: 'OFFLINE', error: err.message });
+        },
+        timer,
+      });
+
+      this.sendMessage({
+        protocol_version: this.PROTOCOL_VERSION,
+        request_id: requestId,
+        type: 'GET_STATUS',
+      });
+    });
+  }
+
+  /**
+   * Solicita snapshot de telemetria em tempo real ao Windows Agent
+   */
+  public async requestTelemetry(timeoutMs = 4000): Promise<TelemetrySnapshot | null> {
+    if (this.connectionState !== 'AGENT_ONLINE' || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return null;
+    }
+
+    const requestId = generateRequestId('tel');
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        resolve(this.currentSnapshot);
+      }, timeoutMs);
+
+      this.pendingRequests.set(requestId, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve(this.currentSnapshot);
+        },
+        reject: () => {
+          clearTimeout(timer);
+          resolve(null);
+        },
+        timer,
+      });
+
+      this.sendMessage({
+        protocol_version: this.PROTOCOL_VERSION,
+        request_id: requestId,
+        type: 'GET_TELEMETRY',
+      });
+    });
+  }
+
+  /**
    * Processamento das mensagens recebidas do Agente Windows
    */
   private handleIncomingMessage(msg: any) {
@@ -283,7 +427,79 @@ class AgentBridgeService {
       return;
     }
 
-    // 5 & 6. Request ID correlation (e.g. TEST_CONNECTION_RESULT)
+    // Telemetria enviada pelo agente
+    if (msg.type === 'TELEMETRY_SNAPSHOT') {
+      const cpuUsage = typeof msg.data?.cpu?.usage === 'number'
+        ? msg.data.cpu.usage
+        : (typeof msg.cpu_usage === 'number' ? msg.cpu_usage : null);
+      const cpuTemp = typeof msg.data?.cpu?.temperature === 'number'
+        ? msg.data.cpu.temperature
+        : (typeof msg.cpu_temp === 'number' ? msg.cpu_temp : null);
+      const cpuClock = typeof msg.data?.cpu?.clock_mhz === 'number'
+        ? msg.data.cpu.clock_mhz
+        : (typeof msg.cpu_clock_mhz === 'number' ? msg.cpu_clock_mhz : null);
+
+      const gpuUsage = typeof msg.data?.gpu?.usage === 'number'
+        ? msg.data.gpu.usage
+        : (typeof msg.gpu_usage === 'number' ? msg.gpu_usage : null);
+      const gpuTemp = typeof msg.data?.gpu?.temperature === 'number'
+        ? msg.data.gpu.temperature
+        : (typeof msg.gpu_temp === 'number' ? msg.gpu_temp : null);
+      const gpuClock = typeof msg.data?.gpu?.clock_mhz === 'number'
+        ? msg.data.gpu.clock_mhz
+        : (typeof msg.gpu_clock_mhz === 'number' ? msg.gpu_clock_mhz : null);
+
+      const ramUsage = typeof msg.data?.memory?.usage === 'number'
+        ? msg.data.memory.usage
+        : (typeof msg.ram_usage === 'number' ? msg.ram_usage : null);
+      const ramUsedMb = typeof msg.data?.memory?.used_mb === 'number'
+        ? msg.data.memory.used_mb
+        : (typeof msg.data?.memory?.used_mb === 'number' ? msg.data.memory.used_mb : null);
+      const ramTotalMb = typeof msg.data?.memory?.total_mb === 'number'
+        ? msg.data.memory.total_mb
+        : (typeof msg.data?.memory?.total_mb === 'number' ? msg.data.memory.total_mb : null);
+
+      const snapshot: TelemetrySnapshot = {
+        version: msg.version || this.PROTOCOL_VERSION,
+        timestamp: msg.timestamp || Date.now(),
+        agent_version: msg.agent_version || '1.0.0',
+        telemetry: {
+          timestamp: msg.timestamp || Date.now(),
+          cpu_usage: cpuUsage,
+          cpu_temperature: cpuTemp,
+          cpu_clock_mhz: cpuClock,
+          cpu_power_w: typeof msg.data?.cpu?.power_w === 'number' ? msg.data.cpu.power_w : null,
+
+          gpu_usage: gpuUsage,
+          gpu_temperature: gpuTemp,
+          gpu_clock_mhz: gpuClock,
+          gpu_memory_used_mb: typeof msg.data?.gpu?.memory_used_mb === 'number' ? msg.data.gpu.memory_used_mb : null,
+          gpu_memory_total_mb: typeof msg.data?.gpu?.memory_total_mb === 'number' ? msg.data.gpu.memory_total_mb : null,
+          gpu_power_w: typeof msg.data?.gpu?.power_w === 'number' ? msg.data.gpu.power_w : null,
+          gpu_vendor: msg.data?.gpu?.vendor || 'UNKNOWN',
+          gpu_model: msg.data?.gpu?.model || null,
+          driver_version: msg.data?.gpu?.driver_version || null,
+          rebar_enabled: typeof msg.data?.gpu?.rebar_enabled === 'boolean' ? msg.data.gpu.rebar_enabled : null,
+
+          ram_usage_pct: ramUsage,
+          ram_used_mb: ramUsedMb,
+          ram_total_mb: ramTotalMb,
+
+          active_process: msg.data?.game?.process || null,
+          active_game_pid: typeof msg.data?.game?.pid === 'number' ? msg.data.game.pid : null,
+          active_game_name: msg.data?.game?.name || null,
+          fps: typeof msg.data?.game?.fps === 'number' ? msg.data.game.fps : null,
+          frametime_ms: typeof msg.data?.game?.frametime_ms === 'number' ? msg.data.game.frametime_ms : null,
+          gpu_latency_ms: typeof msg.data?.game?.gpu_latency_ms === 'number' ? msg.data.game.gpu_latency_ms : null,
+          presentmon_available: Boolean(msg.data?.game?.presentmon_available),
+        },
+      };
+
+      this.currentSnapshot = snapshot;
+      this.telemetryListeners.forEach((listener) => listener(snapshot));
+    }
+
+    // Request ID correlation (e.g. TEST_CONNECTION_RESULT, GET_STATUS, GET_TELEMETRY)
     if (msg.request_id && this.pendingRequests.has(msg.request_id)) {
       const pending = this.pendingRequests.get(msg.request_id);
       this.pendingRequests.delete(msg.request_id);
@@ -291,48 +507,6 @@ class AgentBridgeService {
         pending.resolve(msg);
       }
       return;
-    }
-
-    // Telemetria futura enviada pelo agente
-    if (msg.type === 'TELEMETRY_SNAPSHOT' && msg.data) {
-      const snapshot: TelemetrySnapshot = {
-        version: msg.version || this.PROTOCOL_VERSION,
-        timestamp: msg.timestamp || Date.now(),
-        agent_version: msg.agent_version || '1.0.0',
-        telemetry: {
-          timestamp: msg.timestamp || Date.now(),
-          cpu_usage: typeof msg.data.cpu?.usage === 'number' ? msg.data.cpu.usage : null,
-          cpu_temperature: typeof msg.data.cpu?.temperature === 'number' ? msg.data.cpu.temperature : null,
-          cpu_clock_mhz: typeof msg.data.cpu?.clock_mhz === 'number' ? msg.data.cpu.clock_mhz : null,
-          cpu_power_w: typeof msg.data.cpu?.power_w === 'number' ? msg.data.cpu.power_w : null,
-
-          gpu_usage: typeof msg.data.gpu?.usage === 'number' ? msg.data.gpu.usage : null,
-          gpu_temperature: typeof msg.data.gpu?.temperature === 'number' ? msg.data.gpu.temperature : null,
-          gpu_clock_mhz: typeof msg.data.gpu?.clock_mhz === 'number' ? msg.data.gpu.clock_mhz : null,
-          gpu_memory_used_mb: typeof msg.data.gpu?.memory_used_mb === 'number' ? msg.data.gpu.memory_used_mb : null,
-          gpu_memory_total_mb: typeof msg.data.gpu?.memory_total_mb === 'number' ? msg.data.gpu.memory_total_mb : null,
-          gpu_power_w: typeof msg.data.gpu?.power_w === 'number' ? msg.data.gpu.power_w : null,
-          gpu_vendor: msg.data.gpu?.vendor || 'UNKNOWN',
-          gpu_model: msg.data.gpu?.model || null,
-          driver_version: msg.data.gpu?.driver_version || null,
-          rebar_enabled: typeof msg.data.gpu?.rebar_enabled === 'boolean' ? msg.data.gpu.rebar_enabled : null,
-
-          ram_usage_pct: typeof msg.data.memory?.usage === 'number' ? msg.data.memory.usage : null,
-          ram_used_mb: typeof msg.data.memory?.used_mb === 'number' ? msg.data.memory.used_mb : null,
-          ram_total_mb: typeof msg.data.memory?.total_mb === 'number' ? msg.data.memory.total_mb : null,
-
-          active_process: msg.data.game?.process || null,
-          active_game_pid: typeof msg.data.game?.pid === 'number' ? msg.data.game.pid : null,
-          active_game_name: msg.data.game?.name || null,
-          fps: typeof msg.data.game?.fps === 'number' ? msg.data.game.fps : null,
-          frametime_ms: typeof msg.data.game?.frametime_ms === 'number' ? msg.data.game.frametime_ms : null,
-          gpu_latency_ms: typeof msg.data.game?.gpu_latency_ms === 'number' ? msg.data.game.gpu_latency_ms : null,
-          presentmon_available: Boolean(msg.data.game?.presentmon_available),
-        },
-      };
-
-      this.currentSnapshot = snapshot;
-      this.telemetryListeners.forEach((listener) => listener(snapshot));
     }
   }
 
@@ -349,23 +523,24 @@ class AgentBridgeService {
    */
   public async applyOptimization(
     toolId: string
-  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+  ): Promise<AgentOptimizationResponse> {
     return this.requestApplyOptimization(toolId);
   }
 
   public async requestApplyOptimization(
     toolId: string,
-    timeoutMs = 5000
-  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+    timeoutMs = 8000
+  ): Promise<AgentOptimizationResponse> {
     if (this.connectionState !== 'AGENT_ONLINE') {
       return {
         success: false,
         state: 'FALHA',
+        verified: false,
         error: 'DYARTE Agent não conectado no Windows (127.0.0.1:49152).',
       };
     }
 
-    const requestId = `opt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const requestId = generateRequestId('opt');
 
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -373,6 +548,7 @@ class AgentBridgeService {
         resolve({
           success: false,
           state: 'FALHA',
+          verified: false,
           error: 'Tempo limite esgotado aguardando resposta do DYARTE Agent.',
         });
       }, timeoutMs);
@@ -381,32 +557,37 @@ class AgentBridgeService {
         resolve: (resp) => {
           clearTimeout(timer);
           if (resp.type === 'OPTIMIZATION_RESULT') {
-            if (resp.success) {
-              resolve({ success: true, state: 'APLICADO' });
-            } else {
-              resolve({
-                success: false,
-                state: 'FALHA',
-                error: resp.message || `Operação rejeitada pelo Agent: ${resp.status || 'Falha'}`,
-              });
-            }
+            resolve({
+              success: Boolean(resp.success),
+              state: resp.state || (resp.success ? 'APLICADO' : 'FALHA'),
+              verified: Boolean(resp.verified),
+              before_state: resp.before_state,
+              after_state: resp.after_state,
+              rollback_available: Boolean(resp.rollback_available),
+              duration_ms: resp.duration_ms,
+              message: resp.message,
+              error: resp.error || (!resp.success ? resp.message : undefined),
+              optimization_id: resp.optimization_id,
+            });
           } else if (resp.type === 'ERROR') {
             resolve({
               success: false,
               state: 'FALHA',
+              verified: false,
               error: resp.error || 'Erro reportado pelo Agent.',
             });
           } else {
             resolve({
               success: false,
               state: 'FALHA',
+              verified: false,
               error: 'Resposta inesperada do Agent.',
             });
           }
         },
         reject: (err) => {
           clearTimeout(timer);
-          resolve({ success: false, state: 'FALHA', error: err.message });
+          resolve({ success: false, state: 'FALHA', verified: false, error: err.message });
         },
         timer,
       });
@@ -426,19 +607,19 @@ class AgentBridgeService {
    */
   public async rollbackOptimization(
     toolId: string
-  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+  ): Promise<AgentOptimizationResponse> {
     return this.requestRollbackOptimization(toolId);
   }
 
   public async requestRollbackOptimization(
     toolId: string,
-    timeoutMs = 5000
-  ): Promise<{ success: boolean; state: OptimizationToolState; error?: string }> {
+    timeoutMs = 8000
+  ): Promise<AgentOptimizationResponse> {
     if (this.connectionState !== 'AGENT_ONLINE') {
-      return { success: false, state: 'FALHA', error: 'DYARTE Agent offline.' };
+      return { success: false, state: 'FALHA', verified: false, error: 'DYARTE Agent offline.' };
     }
 
-    const requestId = `rbk_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const requestId = generateRequestId('rbk');
 
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -446,6 +627,7 @@ class AgentBridgeService {
         resolve({
           success: false,
           state: 'FALHA',
+          verified: false,
           error: 'Tempo limite esgotado aguardando reversão do DYARTE Agent.',
         });
       }, timeoutMs);
@@ -454,32 +636,37 @@ class AgentBridgeService {
         resolve: (resp) => {
           clearTimeout(timer);
           if (resp.type === 'OPTIMIZATION_RESULT') {
-            if (resp.success) {
-              resolve({ success: true, state: 'REVERTIDO' });
-            } else {
-              resolve({
-                success: false,
-                state: 'FALHA',
-                error: resp.message || `Reversão rejeitada pelo Agent: ${resp.status || 'Falha'}`,
-              });
-            }
+            resolve({
+              success: Boolean(resp.success),
+              state: resp.state || (resp.success ? 'REVERTIDO' : 'FALHA'),
+              verified: Boolean(resp.verified),
+              before_state: resp.before_state,
+              after_state: resp.after_state,
+              rollback_available: false,
+              duration_ms: resp.duration_ms,
+              message: resp.message,
+              error: resp.error || (!resp.success ? resp.message : undefined),
+              optimization_id: resp.optimization_id,
+            });
           } else if (resp.type === 'ERROR') {
             resolve({
               success: false,
               state: 'FALHA',
+              verified: false,
               error: resp.error || 'Erro reportado pelo Agent.',
             });
           } else {
             resolve({
               success: false,
               state: 'FALHA',
+              verified: false,
               error: 'Resposta inesperada do Agent.',
             });
           }
         },
         reject: (err) => {
           clearTimeout(timer);
-          resolve({ success: false, state: 'FALHA', error: err.message });
+          resolve({ success: false, state: 'FALHA', verified: false, error: err.message });
         },
         timer,
       });
@@ -497,8 +684,6 @@ class AgentBridgeService {
   /**
    * Execução de driver de GPU:
    * Interface unificada que integra o Windows Agent com a camada IPC nativa do Electron.
-   * Se o Agent possuir suporte direto via socket, envia o pacote de controle; caso contrário,
-   * despacha com segurança através da camada nativa DriverService do Electron Main Process.
    */
   public async executeDriver(
     vendor: 'AMD' | 'NVIDIA',
@@ -518,7 +703,7 @@ class AgentBridgeService {
 
     // Se o Agent estiver online via WebSocket e conectado
     if (this.connectionState === 'AGENT_ONLINE') {
-      const requestId = `drv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const requestId = generateRequestId('drv');
       this.sendMessage({
         protocol_version: this.PROTOCOL_VERSION,
         request_id: requestId,

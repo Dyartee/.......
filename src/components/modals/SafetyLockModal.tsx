@@ -20,7 +20,6 @@ export const SafetyLockModal: React.FC = () => {
     toggleSafetyLock,
     isRestoringDefaults,
     restoreWindowsFactoryDefaults,
-    simulateUninstallRollback,
     safetyModalOpen,
     setSafetyModalOpen,
     activeToolsState,
@@ -169,7 +168,7 @@ export const SafetyLockModal: React.FC = () => {
                   await restoreWindowsFactoryDefaults('Restauração manual imediata');
                 }}
                 disabled={isRestoringDefaults}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-xs font-bold transition-all border border-zinc-700 cursor-pointer disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-xs font-bold transition-all border border-zinc-700 cursor-pointer disabled:opacity-50"
               >
                 <RotateCcw className={`w-4 h-4 ${isRestoringDefaults ? 'animate-spin' : ''}`} />
                 <span>
@@ -177,17 +176,6 @@ export const SafetyLockModal: React.FC = () => {
                     ? 'Restaurando Padrão Windows...'
                     : 'Restaurar Padrão de Fábrica Agora'}
                 </span>
-              </button>
-
-              <button
-                onClick={async () => {
-                  await simulateUninstallRollback();
-                }}
-                disabled={isRestoringDefaults}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-red-950 to-red-900/80 hover:from-red-900 hover:to-red-800 text-white font-mono text-xs font-bold transition-all border border-red-700/50 cursor-pointer shadow-lg disabled:opacity-50"
-              >
-                <Trash2 className="w-4 h-4 text-red-300" />
-                <span>Simular Desinstalação (Rollback)</span>
               </button>
             </div>
           </div>

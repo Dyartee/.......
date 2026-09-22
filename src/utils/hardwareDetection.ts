@@ -1,4 +1,5 @@
 import { DeviceInfo } from '../types';
+import { agentBridge } from '../services/agentBridge';
 
 /**
  * DYARTE OPTIMIZER - Hardware Detection Service
@@ -169,19 +170,15 @@ export function detectRealScreen(): string {
 }
 
 /**
- * Constrói as especificações do dispositivo respeitando a hierarquia de fontes:
- * 1. Electron IPC (WMI nativo do Windows)
- * 2. Dados reais persistidos anteriormente (sem valores de mock)
- * 3. Browser APIs (explicitamente identificadas como navegador)
- * 4. N/D para qualquer dado não verificado
+ * Constrói as especificações do dispositivo respeitando a hierarquia de fontes estrita:
+ * 1. Windows Agent nativo via WMI / SetupAPI / NVAPI
+ * 2. Electron IPC nativo verificado
+ * 3. Se desconectado / não detectado: "Aguardando conexão com o Windows..." ou "N/D"
+ *
+ * REGRA ABSOLUTA: NUNCA inferir modelo comercial de hardware via WebGL ou navigator.
  */
 export async function detectFullComputerSpecs(existingDevice?: DeviceInfo): Promise<DeviceInfo> {
-  const cpuInfo = detectRealCPU();
-  const browserGpu = detectRealGPU();
-  const ramInfo = detectRealRAM();
-  const osInfo = detectRealOS();
-
-  // Teste de latência real com backend local
+  // Teste de latência real com backend local (apenas se rota responder)
   let pingMs: number | null = null;
   try {
     const start = performance.now();
@@ -195,7 +192,7 @@ export async function detectFullComputerSpecs(existingDevice?: DeviceInfo): Prom
   }
 
   // Tentar detecção oficial de GPU via Electron IPC se disponível
-  let officialGpu = 'N/D';
+  let officialGpu: string | null = null;
   if (typeof window !== 'undefined' && window.dyarte?.drivers?.detectGpuVendor) {
     try {
       const detection = await window.dyarte.drivers.detectGpuVendor();
@@ -203,69 +200,73 @@ export async function detectFullComputerSpecs(existingDevice?: DeviceInfo): Prom
         officialGpu = detection.gpuNames.join(' / ');
       }
     } catch {
-      // ignore
+      officialGpu = null;
     }
   }
 
-  const chosenGpu =
-    officialGpu !== 'N/D'
-      ? officialGpu
-      : existingDevice?.gpu && existingDevice.gpu !== 'N/D'
-      ? existingDevice.gpu
-      : browserGpu;
+  const isAgentOnline = agentBridge.getState() === 'AGENT_ONLINE';
 
-  const chosenCpu =
-    existingDevice?.cpu && existingDevice.cpu !== 'N/D'
-      ? existingDevice.cpu
-      : cpuInfo.name;
+  let agentStatus: any = null;
+  if (isAgentOnline) {
+    try {
+      agentStatus = await agentBridge.getStatus(2000);
+    } catch {
+      agentStatus = null;
+    }
+  }
 
-  const chosenRam =
-    existingDevice?.ram && existingDevice.ram !== 'N/D'
-      ? existingDevice.ram
-      : ramInfo.formatted;
+  const verifiedCpu = isAgentOnline && agentStatus?.cpu ? agentStatus.cpu : null;
+  const verifiedGpu = officialGpu || (isAgentOnline && agentStatus?.gpu ? agentStatus.gpu : null);
+  const verifiedRam = isAgentOnline && agentStatus?.ram ? agentStatus.ram : null;
+  const verifiedStorage = isAgentOnline && agentStatus?.storage ? agentStatus.storage : null;
+  const verifiedMobo = isAgentOnline && agentStatus?.motherboard ? agentStatus.motherboard : null;
+  const verifiedBios = isAgentOnline && agentStatus?.bios_version ? agentStatus.bios_version : undefined;
+  const verifiedSecureBoot = isAgentOnline && typeof agentStatus?.secure_boot === 'boolean' ? agentStatus.secure_boot : null;
+
+  const offlineLabel = 'Aguardando dados do Agent';
 
   return {
-    cpu: chosenCpu,
-    gpu: chosenGpu,
-    ram: chosenRam,
-    storage: existingDevice?.storage && existingDevice.storage !== 'N/D' ? existingDevice.storage : 'N/D',
-    motherboard: existingDevice?.motherboard && existingDevice.motherboard !== 'N/D' ? existingDevice.motherboard : 'N/D',
-    motherboard_chipset: existingDevice?.motherboard_chipset || undefined,
-    bios_version: existingDevice?.bios_version || undefined,
-    resizable_bar: existingDevice?.resizable_bar ?? null,
-    secure_boot: existingDevice?.secure_boot ?? null,
-    xmp_profile: existingDevice?.xmp_profile ?? null,
-    input_lag_ms: existingDevice?.input_lag_ms ?? null,
-    ram_frequency: existingDevice?.ram_frequency ?? null,
-    gpu_clock_mhz: existingDevice?.gpu_clock_mhz ?? null,
-    cpu_clock_mhz: existingDevice?.cpu_clock_mhz ?? null,
-    cpu_power_w: existingDevice?.cpu_power_w ?? null,
-    cpu_temperature: existingDevice?.cpu_temperature ?? null,
-    gpu_temperature: existingDevice?.gpu_temperature ?? null,
-    gpu_power_w: existingDevice?.gpu_power_w ?? null,
-    gpu_memory_used_mb: existingDevice?.gpu_memory_used_mb ?? null,
-    gpu_memory_total_mb: existingDevice?.gpu_memory_total_mb ?? null,
-    ram_used_mb: existingDevice?.ram_used_mb ?? null,
-    ram_total_mb: existingDevice?.ram_total_mb ?? null,
-    fps: existingDevice?.fps ?? null,
-    frametime_ms: existingDevice?.frametime_ms ?? null,
-    gpu_latency_ms: existingDevice?.gpu_latency_ms ?? null,
-    active_process: existingDevice?.active_process ?? null,
-    active_game_pid: existingDevice?.active_game_pid ?? null,
-    active_game_name: existingDevice?.active_game_name ?? null,
-    driver_version: existingDevice?.driver_version ?? null,
-    windows_license: existingDevice?.windows_license ?? null,
-    windows: existingDevice?.windows && existingDevice.windows !== 'N/D' ? existingDevice.windows : osInfo.name,
-    windows_version: existingDevice?.windows_version && existingDevice.windows_version !== 'N/D' ? existingDevice.windows_version : osInfo.version,
-    build: existingDevice?.build && existingDevice.build !== 'N/D' ? existingDevice.build : osInfo.build,
-    device_id: existingDevice?.device_id && existingDevice.device_id !== 'N/D' ? existingDevice.device_id : `DYARTE-PC-${Date.now().toString(36).toUpperCase()}`,
-    is_agent_connected: Boolean(existingDevice?.is_agent_connected),
-    agent_version: existingDevice?.is_agent_connected ? (existingDevice.agent_version || '1.0.0') : 'N/D',
-    last_heartbeat: existingDevice?.is_agent_connected ? (existingDevice.last_heartbeat || 'Conectado') : 'Desconectado',
-    cpu_usage_pct: existingDevice?.cpu_usage_pct ?? null,
-    gpu_usage_pct: existingDevice?.gpu_usage_pct ?? null,
-    ram_usage_pct: existingDevice?.ram_usage_pct ?? null,
-    temp_c: existingDevice?.temp_c ?? null,
+    cpu: verifiedCpu || (isAgentOnline ? 'Não reportado pelo Agent' : offlineLabel),
+    gpu: verifiedGpu || (isAgentOnline ? 'Não reportado pelo Agent' : offlineLabel),
+    ram: verifiedRam || (isAgentOnline ? 'Não reportado pelo Agent' : 'N/D'),
+    storage: verifiedStorage || 'N/D',
+    motherboard: verifiedMobo || 'N/D',
+    motherboard_chipset: undefined,
+    bios_version: verifiedBios,
+    resizable_bar: null,
+    secure_boot: verifiedSecureBoot,
+    xmp_profile: null,
+    input_lag_ms: null,
+    ram_frequency: null,
+    gpu_clock_mhz: null,
+    cpu_clock_mhz: null,
+    cpu_power_w: null,
+    cpu_temperature: null,
+    gpu_temperature: null,
+    gpu_power_w: null,
+    gpu_memory_used_mb: null,
+    gpu_memory_total_mb: null,
+    ram_used_mb: null,
+    ram_total_mb: null,
+    fps: null,
+    frametime_ms: null,
+    gpu_latency_ms: null,
+    active_process: null,
+    active_game_pid: null,
+    active_game_name: null,
+    driver_version: null,
+    windows_license: null,
+    windows: agentStatus?.os || (isAgentOnline ? 'Windows' : 'Windows (Aguardando Agent)'),
+    windows_version: 'N/D',
+    build: 'N/D',
+    device_id: agentStatus?.device_id || existingDevice?.device_id || 'DYARTE-PC-LOCAL',
+    is_agent_connected: isAgentOnline,
+    agent_version: isAgentOnline ? '1.0.0' : 'N/D',
+    last_heartbeat: isAgentOnline ? 'Conectado' : 'Desconectado',
+    cpu_usage_pct: null,
+    gpu_usage_pct: null,
+    ram_usage_pct: null,
+    temp_c: null,
     ping_ms: pingMs,
   };
 }

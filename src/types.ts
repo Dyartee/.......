@@ -1,12 +1,14 @@
 export type UserRole = 'USER' | 'ADMIN';
 
-export type PlanLevel = 0 | 1 | 2 | 3 | 4;
+export type PlanLevel = 1 | 2 | 3 | 4;
 
 export type PlanId = 'basico' | 'medio' | 'avancado' | 'completo';
 
 export type LicenseStatus = 'ATIVA' | 'PENDENTE' | 'EXPIRADA' | 'SUSPENSA' | 'CANCELADA';
 
 export type ToolCategory = 'SISTEMA' | 'DESEMPENHO' | 'GAMING' | 'GPU';
+
+export type ToolRiskLevel = 'SAFE' | 'ADVANCED' | 'EXPERIMENTAL';
 
 export type AgentConnectionState =
   | 'AGENT_OFFLINE'
@@ -45,7 +47,7 @@ export interface User {
   data_criacao: string;
   plano_atual: string;
   nivel_plano: PlanLevel;
-  status_plano: 'ATIVO' | 'EXPIRADO' | 'PENDENTE' | 'SEM_PLANO';
+  status_plano: 'ATIVO' | 'EXPIRADO' | 'PENDENTE';
   data_inicio: string;
   data_expiracao: string;
   license_id: string;
@@ -81,6 +83,8 @@ export interface Tool {
   icon: string;
   impact: 'Médio' | 'Alto' | 'Máximo';
   details: string;
+  risk_level: ToolRiskLevel;
+  is_reversible: boolean;
   powershellSnippet?: string;
 }
 
@@ -101,6 +105,7 @@ export interface OptimizationHistoryItem {
   agent_version?: string;
   error?: string;
   rollback_available?: boolean;
+  verified?: boolean;
 }
 
 export interface DeviceInfo {

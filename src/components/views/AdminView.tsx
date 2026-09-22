@@ -429,6 +429,8 @@ export const AdminView: React.FC = () => {
       icon: 'Sliders',
       impact: newToolImpact,
       details: 'Rotina injetada via painel administrativo DYARTE.',
+      risk_level: 'SAFE',
+      is_reversible: true,
     };
 
     adminAddTool(tool);

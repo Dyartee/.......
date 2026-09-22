@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import { initializeApp, getApps, App as AdminApp } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
@@ -196,7 +196,7 @@ async function requireAdmin(req: AuthenticatedRequest, res: Response, next: Next
 // Log administrative actions to database
 async function recordAdminLog(action: string, adminEmail: string, target: string, details: string) {
   try {
-    const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const logId = `log_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     await adminDb.collection('admin_logs').doc(logId).set({
       log_id: logId,
       action,
@@ -334,7 +334,7 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
     }
 
     // Record optimization authorization in database
-    const historyId = `opt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const historyId = `opt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const authItem = {
       history_id: historyId,
       user_id: uid,
@@ -450,7 +450,7 @@ app.post('/api/webhook/cakto', async (req: Request, res: Response) => {
 
     const userDoc = userSnap.docs[0];
     const uid = userDoc.id;
-    const newLicenseId = `lic_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+    const newLicenseId = `lic_${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     await userDoc.ref.update({
@@ -465,7 +465,7 @@ app.post('/api/webhook/cakto', async (req: Request, res: Response) => {
 
     await adminDb.collection('licenses').doc(newLicenseId).set({
       license_id: newLicenseId,
-      license_key: `DYARTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      license_key: `DYARTE-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
       user_id: uid,
       user_name: customer_name || userDoc.data().nome || 'Cliente',
       user_email: safeEmail,
@@ -510,16 +510,16 @@ app.post('/api/admin/user/plan', requireAuth, requireAdmin, async (req: Authenti
       return res.status(400).json({ error: 'ID do usuário e nível do plano são obrigatórios.' });
     }
 
-    const safeLevel = Math.max(0, Math.min(4, Number(plan_level)));
-    const safeName = plan_name || (safeLevel === 0 ? 'SEM PLANO' : safeLevel === 2 ? 'MÉDIO' : safeLevel === 3 ? 'AVANÇADO' : 'COMPLETO');
+    const safeLevel = Math.max(1, Math.min(4, Number(plan_level)));
+    const safeName = plan_name || (safeLevel === 1 ? 'BÁSICO' : safeLevel === 2 ? 'MÉDIO' : safeLevel === 3 ? 'AVANÇADO' : 'COMPLETO');
 
     const updateData: Record<string, any> = {
       plano_atual: safeName,
       nivel_plano: safeLevel,
-      status_plano: safeLevel > 0 ? 'ATIVO' : 'SEM_PLANO',
-      status_licenca: safeLevel > 0 ? 'ATIVA' : 'PENDENTE',
-      data_inicio: safeLevel > 0 ? new Date().toISOString().split('T')[0] : '-',
-      data_expiracao: safeLevel > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : '-',
+      status_plano: 'ATIVO',
+      status_licenca: 'ATIVA',
+      data_inicio: new Date().toISOString().split('T')[0],
+      data_expiracao: safeLevel === 1 ? 'VITALÍCIO' : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     };
 
     await adminDb.collection('users').doc(target_user_id).update(updateData);
@@ -617,7 +617,7 @@ app.post('/api/admin/license/action', requireAuth, requireAdmin, async (req: Aut
     const { action, license_id, user_id, plan_id } = req.body;
 
     if (action === 'CREATE') {
-      const newLicenseId = `lic_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+      const newLicenseId = `lic_${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
       const newLicense = {
         license_id: newLicenseId,
         user_id: user_id || 'unassigned',
@@ -731,7 +731,7 @@ async function startServer() {
     // Resolução resiliente da pasta dist para produção e Electron
     const currentDir = typeof __dirname !== 'undefined'
       ? __dirname
-      : path.dirname(fileURLToPath(import.meta.url));
+      : process.cwd();
 
     const candidateDistPaths = [
       process.env.STATIC_DIST_PATH,
@@ -769,7 +769,8 @@ async function startServer() {
     });
   }
 
-  const HOST = process.env.HOST || (process.env.ELECTRON_RUN_AS_NODE ? '127.0.0.1' : '0.0.0.0');
+  // In Cloud Run containers, binding to 0.0.0.0 is strictly required for ingress and TCP health probes
+  const HOST = '0.0.0.0';
 
   app.listen(PORT, HOST, () => {
     console.log(`DYARTE OPTIMIZER Server listening on http://${HOST}:${PORT}`);

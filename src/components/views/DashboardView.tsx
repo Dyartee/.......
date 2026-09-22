@@ -53,24 +53,12 @@ export const DashboardView: React.FC = () => {
 
   const handleStartMainOptimization = async () => {
     if (isOptimizing) return;
-    if ((currentUser?.nivel_plano ?? 0) === 0 || currentUser?.status_plano === 'SEM_PLANO') {
-      openUpgradeModal(1, 'Otimização Geral do Sistema', 'SISTEMA');
-      return;
+    setOptProgress(50);
+    try {
+      await executeFullSystemOptimization();
+    } finally {
+      setOptProgress(0);
     }
-    setOptProgress(10);
-    const interval = setInterval(() => {
-      setOptProgress((p) => {
-        if (p >= 90) {
-          clearInterval(interval);
-          return 90;
-        }
-        return p + 15;
-      });
-    }, 280);
-
-    await executeFullSystemOptimization();
-    setOptProgress(100);
-    setTimeout(() => setOptProgress(0), 1000);
   };
 
   const lastOpt = history.length > 0 ? history[0] : null;
@@ -102,11 +90,11 @@ export const DashboardView: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-mono font-bold tracking-wider text-white uppercase">
-                  {(currentUser?.nivel_plano ?? 0) === 0 ? t('plan_no_plan') : `${t('nav_plans').toUpperCase()} ${currentUser?.plano_atual}`}
+                  {`PLANO ${currentUser?.plano_atual || 'BÁSICO'}`}
                 </span>
-                {(currentUser?.nivel_plano ?? 0) === 0 ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-700/40 font-semibold">
-                    {t('plan_view_mode')}
+                {(currentUser?.nivel_plano ?? 1) === 1 ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-700/40 font-semibold">
+                    GRATUITO
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-[10px] font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-700/40">
@@ -116,9 +104,9 @@ export const DashboardView: React.FC = () => {
                 )}
               </div>
               <p className="text-[11px] text-zinc-400 mt-0.5">
-                {(currentUser?.nivel_plano ?? 0) === 0 ? (
+                {(currentUser?.nivel_plano ?? 1) === 1 ? (
                   <span className="text-zinc-400">
-                    {t('dash_view_only_desc')} • <button onClick={() => setCurrentView('plans')} className="text-[#FF4444] hover:underline cursor-pointer font-mono">{t('dash_view_plans_web')}</button>
+                    Plano Básico Gratuito ativo • <button onClick={() => setCurrentView('plans')} className="text-[#FF4444] hover:underline cursor-pointer font-mono">Fazer Upgrade</button>
                   </span>
                 ) : (
                   <>

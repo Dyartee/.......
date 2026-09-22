@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useApp } from '../../context/AppContext';
-import { Plan, PlanId } from '../../types';
+import { Plan } from '../../types';
 import {
   Check,
   CheckCircle2,
@@ -10,16 +10,10 @@ import {
   Gem,
   HelpCircle,
   ShieldCheck,
-  Sparkles,
-  Zap,
 } from 'lucide-react';
 
 export const PlansView: React.FC = () => {
-  const { plans, currentUser, config, adminProcessWebhookPayment, addToast, t } = useApp();
-
-  const [simulatedEmail, setSimulatedEmail] = useState(currentUser?.email || '');
-  const [isSimulatingPayment, setIsSimulatingPayment] = useState(false);
-  const [selectedPlanForSim, setSelectedPlanForSim] = useState<PlanId>('completo');
+  const { plans, currentUser, config, addToast, t } = useApp();
 
   const handleExternalBuy = (plan: Plan) => {
     const url = config[plan.checkoutUrlKey] || 'https://dyarte.com/planos';
@@ -29,23 +23,6 @@ export const PlansView: React.FC = () => {
       `${t('toast_checkout_msg')} ${plan.name}: ${url}`
     );
     window.open(url, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleSimulateWebhook = async (planId: PlanId) => {
-    setIsSimulatingPayment(true);
-    const targetPlan = plans.find((p) => p.id === planId);
-    if (!targetPlan) return;
-
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-
-    adminProcessWebhookPayment({
-      email: simulatedEmail || currentUser?.email || 'cliente@email.com',
-      plan_id: planId,
-      transaction_id: `TX-${Math.floor(100000 + Math.random() * 900000)}`,
-      amount: targetPlan.price,
-    });
-
-    setIsSimulatingPayment(false);
   };
 
   return (
@@ -64,20 +41,21 @@ export const PlansView: React.FC = () => {
         </p>
       </div>
 
-      {/* 3 Cards Desktop Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch max-w-5xl mx-auto">
+      {/* 4 Cards Desktop Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 items-stretch max-w-7xl mx-auto">
         {plans.map((plan) => {
-          const userPlanLevel = currentUser?.nivel_plano ?? 0;
+          const userPlanLevel = currentUser?.nivel_plano ?? 1;
           const isCurrentPlan =
-            (userPlanLevel > 0 && userPlanLevel === plan.level) ||
+            userPlanLevel === plan.level ||
             currentUser?.plano_atual.toUpperCase() === plan.name.toUpperCase();
           const isPreviousPlan = userPlanLevel > plan.level;
           const isComplete = plan.id === 'completo';
+          const isFree = plan.price === 0;
 
           return (
             <div
               key={plan.id}
-              className={`rounded-2xl p-6 flex flex-col justify-between relative transition-all duration-300 ${
+              className={`rounded-2xl p-5 flex flex-col justify-between relative transition-all duration-300 ${
                 isCurrentPlan
                   ? 'bg-gradient-to-b from-[#220d0d] via-[#160b0d] to-[#0f0d12] border-2 border-[#E00000] shadow-[0_0_35px_rgba(224,0,0,0.5)] ring-2 ring-[#E00000]/60 z-10'
                   : isPreviousPlan
@@ -111,6 +89,12 @@ export const PlansView: React.FC = () => {
                     }`}
                   >
                     {plan.badgeType === 'max' ? t('plan_badge_max') : t('plan_badge_rec')}
+                  </span>
+                </div>
+              ) : isFree ? (
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[9px] font-mono uppercase tracking-wider bg-emerald-950/80 text-emerald-400 border border-emerald-700/50 whitespace-nowrap font-bold">
+                    GRATUITO
                   </span>
                 </div>
               ) : null}
@@ -154,17 +138,26 @@ export const PlansView: React.FC = () => {
                       : 'border-zinc-800'
                   }`}
                 >
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-xs text-zinc-400 font-mono">R$</span>
-                    <span
-                      className={`text-3xl font-black font-mono ${
-                        isPreviousPlan ? 'text-zinc-400' : 'text-white'
-                      }`}
-                    >
-                      {plan.price.toFixed(2).replace('.', ',')}
-                    </span>
-                    <span className="text-xs text-zinc-500 font-mono">/{t('plan_period_month')}</span>
-                  </div>
+                  {isFree ? (
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-2xl font-black font-mono text-emerald-400">
+                        GRATUITO
+                      </span>
+                      <span className="text-xs text-zinc-500 font-mono">/ Vitalício</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-xs text-zinc-400 font-mono">R$</span>
+                      <span
+                        className={`text-3xl font-black font-mono ${
+                          isPreviousPlan ? 'text-zinc-400' : 'text-white'
+                        }`}
+                      >
+                        {plan.price.toFixed(2).replace('.', ',')}
+                      </span>
+                      <span className="text-xs text-zinc-500 font-mono">/{t('plan_period_month')}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Features List */}
@@ -215,8 +208,8 @@ export const PlansView: React.FC = () => {
                     onClick={() => handleExternalBuy(plan)}
                     className="w-full py-3 px-4 rounded-xl text-xs font-mono font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer bg-[#E00000] hover:bg-[#c50000] text-white shadow-[0_0_20px_rgba(224,0,0,0.4)] hover:shadow-[0_0_28px_rgba(224,0,0,0.6)]"
                   >
-                    <span>{t('plan_buy_official')}</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>{isFree ? 'Plano Ativo Grátis' : t('plan_buy_official')}</span>
+                    {!isFree && <ExternalLink className="w-3.5 h-3.5" />}
                   </button>
                 )}
               </div>
@@ -224,74 +217,6 @@ export const PlansView: React.FC = () => {
           );
         })}
       </div>
-
-      {/* Architecture & Webhook Live Simulation Card - Visible exclusively to Administrator */}
-      {currentUser?.role === 'ADMIN' && (
-        <div className="p-6 rounded-2xl bg-[#101017] border border-amber-500/30 space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                <h3 className="text-sm font-bold text-white font-mono uppercase">
-                  {t('plans_webhook_title')} <span className="text-amber-400 text-xs font-mono ml-2">[PAINEL ADMINISTRATIVO]</span>
-                </h3>
-              </div>
-              <p className="text-xs text-zinc-400 mt-1 max-w-2xl">
-                Ambiente de teste e simulação de ativação de licenças via webhook oficial DYARTE. Restrito ao administrador.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={selectedPlanForSim}
-                onChange={(e) => setSelectedPlanForSim(e.target.value as PlanId)}
-                className="px-3 py-2 rounded-lg bg-[#09090d] border border-zinc-700 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
-              >
-                <option value="medio">{t('plan_name_medio')} (R$ 30,00)</option>
-                <option value="avancado">{t('plan_name_avancado')} (R$ 45,00)</option>
-                <option value="completo">{t('plan_name_completo')} (R$ 60,00)</option>
-              </select>
-
-              <button
-                onClick={() => handleSimulateWebhook(selectedPlanForSim)}
-                disabled={isSimulatingPayment}
-                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-md disabled:opacity-50"
-              >
-                {isSimulatingPayment ? (
-                  <>
-                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    <span>{t('plans_syncing')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Zap className="w-3.5 h-3.5" />
-                    <span>Testar Ativação</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
-          {/* Visual Architecture Flow Diagram */}
-          <div className="p-4 rounded-xl bg-[#09090d] border border-zinc-800/80 font-mono text-[11px] text-zinc-400 overflow-x-auto">
-            <div className="flex items-center gap-2 text-zinc-300 min-w-[600px]">
-              <span className="text-white font-bold">{t('plans_flow_client')}</span>
-              <span>→</span>
-              <span className="text-zinc-400">{t('plans_flow_choose')}</span>
-              <span>→</span>
-              <span className="text-rose-400">{t('plans_flow_checkout')}</span>
-              <span>→</span>
-              <span className="text-emerald-400 font-bold">{t('plans_flow_approved')}</span>
-              <span>→</span>
-              <span className="text-amber-400 font-bold">{t('plans_flow_sync')}</span>
-              <span>→</span>
-              <span className="text-[#FF4444] font-bold">{t('plans_flow_updated')}</span>
-              <span>→</span>
-              <span className="text-white font-bold">{t('plans_flow_unlocked')}</span>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

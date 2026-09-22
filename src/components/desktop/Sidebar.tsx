@@ -130,22 +130,22 @@ export const Sidebar: React.FC = () => {
             <div
               onClick={() => setCurrentView('plans')}
               className={`p-2.5 rounded-lg border transition-all cursor-pointer group ${
-                (currentUser.nivel_plano ?? 0) === 0
-                  ? 'bg-[#14141c] border-amber-500/30 hover:border-amber-500/60'
+                (currentUser.nivel_plano ?? 1) === 1
+                  ? 'bg-[#14141c] border-emerald-500/30 hover:border-emerald-500/60'
                   : 'bg-[#14141c] border-[#232330] hover:border-[#E00000]/60'
               }`}
             >
               <div className="flex items-center justify-between mb-1">
                 <span
                   className={`text-[10px] font-mono font-bold tracking-wider uppercase ${
-                    (currentUser.nivel_plano ?? 0) === 0 ? 'text-amber-400' : 'text-[#FF4444]'
+                    (currentUser.nivel_plano ?? 1) === 1 ? 'text-emerald-400' : 'text-[#FF4444]'
                   }`}
                 >
-                  {(currentUser.nivel_plano ?? 0) === 0 ? 'SEM PLANO ATIVO' : `PLANO ${currentUser.plano_atual}`}
+                  {`PLANO ${currentUser.plano_atual || 'BÁSICO'}`}
                 </span>
-                {(currentUser.nivel_plano ?? 0) === 0 ? (
-                  <span className="flex items-center gap-1 text-[9px] font-mono text-amber-400 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40 font-semibold">
-                    VISUALIZAÇÃO
+                {(currentUser.nivel_plano ?? 1) === 1 ? (
+                  <span className="flex items-center gap-1 text-[9px] font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40 font-semibold">
+                    GRATUITO
                   </span>
                 ) : (
                   <span className="flex items-center gap-1 text-[9px] font-mono text-emerald-400">
@@ -155,9 +155,9 @@ export const Sidebar: React.FC = () => {
                 )}
               </div>
               <p className="text-[10px] text-zinc-400 leading-tight">
-                {(currentUser.nivel_plano ?? 0) === 0 ? (
-                  <span className="text-zinc-400 group-hover:text-amber-300 transition-colors">
-                    Toque para escolher um plano
+                {(currentUser.nivel_plano ?? 1) === 1 ? (
+                  <span className="text-zinc-400 group-hover:text-emerald-300 transition-colors">
+                    Plano Básico Ativo • Upgrade
                   </span>
                 ) : (
                   <>

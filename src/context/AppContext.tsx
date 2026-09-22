@@ -204,7 +204,6 @@ interface AppContextType {
   toggleSafetyLock: () => void;
   isRestoringDefaults: boolean;
   restoreWindowsFactoryDefaults: (reason?: string) => Promise<{ success: boolean; message: string }>;
-  simulateUninstallRollback: () => Promise<{ success: boolean; message: string }>;
   safetyModalOpen: boolean;
   setSafetyModalOpen: (open: boolean) => void;
 
@@ -227,14 +226,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Stored state with local storage fallback
   const [users, setUsers] = useState<User[]>(() => {
     const saved = localStorage.getItem('dyarte_users');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
+    const list: User[] = saved ? JSON.parse(saved) : INITIAL_USERS;
+    return list.map((u) => {
+      if (!u.nivel_plano || u.nivel_plano < 1) {
+        return { ...u, nivel_plano: 1 as PlanLevel, plano_atual: 'BÁSICO', status_plano: 'ATIVO' };
+      }
+      return u;
+    });
   });
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('dyarte_current_user');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const u = JSON.parse(saved);
+        if (u) {
+          if (!u.nivel_plano || u.nivel_plano < 1) {
+            u.nivel_plano = 1;
+            u.plano_atual = 'BÁSICO';
+            u.status_plano = 'ATIVO';
+          }
+          return u;
+        }
       } catch {
         // fallback
       }
@@ -259,7 +272,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [plans, setPlans] = useState<Plan[]>(() => {
     const saved = localStorage.getItem('dyarte_plans');
     const loaded: Plan[] = saved ? JSON.parse(saved) : INITIAL_PLANS;
-    return loaded.filter((p) => p.id !== 'basico');
+    const hasBasico = loaded.some((p) => p.id === 'basico');
+    if (!hasBasico) {
+      return INITIAL_PLANS;
+    }
+    return loaded;
   });
 
   const [tools, setTools] = useState<Tool[]>(() => {
@@ -460,15 +477,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       success: true,
       message: 'Otimizações locais desativadas com sucesso.',
     };
-  };
-
-  const simulateUninstallRollback = async (): Promise<{ success: boolean; message: string }> => {
-    addToast(
-      'info',
-      'Simulação de Desinstalação',
-      'Iniciando rotina de desinstalação segura do DYARTE Optimizer...'
-    );
-    return await restoreWindowsFactoryDefaults('Desinstalação do aplicativo pelo cliente');
   };
 
   // Driver Pipeline State (Download, Extract, Execute)
@@ -1064,7 +1072,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [adminLogs]);
 
   const addToast = (type: ToastMessage['type'], title: string, message: string) => {
-    const id = Math.random().toString(36).substring(2, 9);
+    const id = `toast_${Date.now()}_${toasts.length + 1}`;
     setToasts((prev) => [...prev, { id, type, title, message }]);
     setTimeout(() => {
       removeToast(id);
@@ -1128,7 +1136,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addToast(
           'success',
           'Conta Sincronizada',
-          `Plano ${refreshedUser.plano_atual || 'SEM PLANO'} atualizado diretamente do banco de dados.`
+          `Plano ${refreshedUser.plano_atual || 'BÁSICO'} atualizado diretamente do banco de dados.`
         );
         return { success: true, message: 'Dados sincronizados com o servidor.' };
       } else {
@@ -1184,13 +1192,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               nome: fbUser.displayName || (isAdminEmail ? 'Kelber Duarte' : emailLower.split('@')[0]),
               email: emailLower,
               data_criacao: new Date().toISOString().split('T')[0],
-              plano_atual: isAdminEmail ? 'COMPLETO' : 'SEM PLANO',
-              nivel_plano: isAdminEmail ? 4 : 0,
-              status_plano: isAdminEmail ? 'ATIVO' : 'SEM_PLANO',
+              plano_atual: isAdminEmail ? 'COMPLETO' : 'BÁSICO',
+              nivel_plano: (isAdminEmail ? 4 : 1) as PlanLevel,
+              status_plano: 'ATIVO',
               data_inicio: new Date().toISOString().split('T')[0],
-              data_expiracao: isAdminEmail ? '2030-12-31' : '-',
-              license_id: isAdminEmail ? 'lic_admin_duarte_master' : '',
-              status_licenca: isAdminEmail ? 'ATIVA' : 'PENDENTE',
+              data_expiracao: isAdminEmail ? '2030-12-31' : 'Vitalício (Gratuito)',
+              license_id: isAdminEmail ? 'lic_admin_duarte_master' : `lic_free_${fbUser.uid.slice(0, 8)}`,
+              status_licenca: 'ATIVA',
               device_id: device.device_id,
               ultimo_login: 'Agora mesmo',
               role: isAdminEmail ? 'ADMIN' : 'USER',
@@ -1249,13 +1257,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             nome: fbUser.displayName || (isAdmin ? 'Kelber Duarte' : safeEmail.split('@')[0]),
             email: safeEmail,
             data_criacao: new Date().toISOString().split('T')[0],
-            plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
-            nivel_plano: isAdmin ? 4 : 0,
-            status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+            plano_atual: isAdmin ? 'COMPLETO' : 'BÁSICO',
+            nivel_plano: (isAdmin ? 4 : 1) as PlanLevel,
+            status_plano: 'ATIVO',
             data_inicio: new Date().toISOString().split('T')[0],
-            data_expiracao: isAdmin ? '2030-12-31' : '-',
-            license_id: isAdmin ? 'lic_admin_duarte_master' : '',
-            status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+            data_expiracao: isAdmin ? '2030-12-31' : 'Vitalício (Gratuito)',
+            license_id: isAdmin ? 'lic_admin_duarte_master' : `lic_free_${fbUser.uid.slice(0, 8)}`,
+            status_licenca: 'ATIVA',
             device_id: device.device_id,
             ultimo_login: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
             role: isAdmin ? 'ADMIN' : 'USER',
@@ -1270,13 +1278,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           nome: isAdmin ? 'Kelber Duarte' : safeEmail.split('@')[0],
           email: safeEmail,
           data_criacao: new Date().toISOString().split('T')[0],
-          plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
-          nivel_plano: isAdmin ? 4 : 0,
-          status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+          plano_atual: isAdmin ? 'COMPLETO' : 'BÁSICO',
+          nivel_plano: (isAdmin ? 4 : 1) as PlanLevel,
+          status_plano: 'ATIVO',
           data_inicio: new Date().toISOString().split('T')[0],
-          data_expiracao: isAdmin ? '2030-12-31' : '-',
-          license_id: isAdmin ? 'lic_admin_duarte_master' : '',
-          status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+          data_expiracao: isAdmin ? '2030-12-31' : 'Vitalício (Gratuito)',
+          license_id: isAdmin ? 'lic_admin_duarte_master' : `lic_free_${fbUser.uid.slice(0, 8)}`,
+          status_licenca: 'ATIVA',
           device_id: device.device_id,
           ultimo_login: 'Agora mesmo',
           role: isAdmin ? 'ADMIN' : 'USER',
@@ -1379,13 +1387,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         nome: safeNome,
         email: safeEmail,
         data_criacao: new Date().toISOString().split('T')[0],
-        plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
-        nivel_plano: isAdmin ? 4 : 0,
-        status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+        plano_atual: isAdmin ? 'COMPLETO' : 'BÁSICO',
+        nivel_plano: (isAdmin ? 4 : 1) as PlanLevel,
+        status_plano: 'ATIVO',
         data_inicio: new Date().toISOString().split('T')[0],
-        data_expiracao: isAdmin ? '2030-12-31' : '-',
-        license_id: isAdmin ? 'lic_admin_duarte_master' : '',
-        status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+        data_expiracao: isAdmin ? '2030-12-31' : 'Vitalício (Gratuito)',
+        license_id: isAdmin ? 'lic_admin_duarte_master' : `lic_free_${fbUser.uid.slice(0, 8)}`,
+        status_licenca: 'ATIVA',
         device_id: device.device_id,
         ultimo_login: 'Agora mesmo',
         role: isAdmin ? 'ADMIN' : 'USER',
@@ -1455,13 +1463,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           nome: fbUser.displayName || (isAdmin ? 'Kelber Duarte' : emailLower.split('@')[0]),
           email: emailLower,
           data_criacao: new Date().toISOString().split('T')[0],
-          plano_atual: isAdmin ? 'COMPLETO' : 'SEM PLANO',
-          nivel_plano: isAdmin ? 4 : 0,
-          status_plano: isAdmin ? 'ATIVO' : 'SEM_PLANO',
+          plano_atual: isAdmin ? 'COMPLETO' : 'BÁSICO',
+          nivel_plano: (isAdmin ? 4 : 1) as PlanLevel,
+          status_plano: 'ATIVO',
           data_inicio: new Date().toISOString().split('T')[0],
-          data_expiracao: isAdmin ? '2030-12-31' : '-',
-          license_id: isAdmin ? 'lic_admin_duarte_master' : '',
-          status_licenca: isAdmin ? 'ATIVA' : 'PENDENTE',
+          data_expiracao: isAdmin ? '2030-12-31' : 'Vitalício (Gratuito)',
+          license_id: isAdmin ? 'lic_admin_duarte_master' : `lic_free_${fbUser.uid.slice(0, 8)}`,
+          status_licenca: 'ATIVA',
           device_id: device.device_id,
           ultimo_login: 'Agora mesmo',
           role: isAdmin ? 'ADMIN' : 'USER',
@@ -1729,11 +1737,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Strict permission check
-    if (currentUser.nivel_plano === 0 || currentUser.nivel_plano < tool.required_plan_level) {
+    if (currentUser.nivel_plano < tool.required_plan_level) {
       openUpgradeModal(tool.required_plan_level, tool.nome, tool.categoria);
       addToast(
         'info',
-        'Modo de Visualização',
+        'Upgrade Necessário',
         `Esta função está disponível a partir do ${getPlanNameByLevel(tool.required_plan_level)}. Faça upgrade para executá-la no seu computador.`
       );
       return {
@@ -1788,14 +1796,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Execution via real OptimizationEngine linked to DYARTE Agent
-    const result = await optimizationEngine.executeTool(toolId);
+    const result = await optimizationEngine.applyTool(toolId, currentUser.nivel_plano);
 
     setIsOptimizing(false);
     setActiveOptimizingToolId(null);
 
     if (!result.success) {
       // Never report SUCCESS if operation was not executed or not implemented
-      const failMsg = result.error || 'Operação não implementada no DYARTE Agent para esta versão.';
+      const failMsg = result.error || result.message || 'Operação não executada pelo DYARTE Agent.';
       addToast('warning', 'Não Executado pelo Agent', failMsg);
       return { success: false, message: failMsg };
     }
@@ -1808,9 +1816,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       category: tool.categoria,
       date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       status: 'SUCESSO',
-      result: `Otimização aplicada e confirmada pelo Windows Agent: ${tool.nome}.`,
-      duration_ms: 150,
-      details: tool.details,
+      result: result.message || `Otimização aplicada e confirmada pelo Windows Agent: ${tool.nome}.`,
+      duration_ms: result.durationMs || 150,
+      details: result.afterState
+        ? `Antes: ${JSON.stringify(result.beforeState)} | Depois: ${JSON.stringify(result.afterState)}`
+        : tool.details,
     };
 
     setHistory((prev) => [historyItem, ...prev]);
@@ -1840,11 +1850,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Strict permission check
-    if (currentUser.nivel_plano === 0 || currentUser.nivel_plano < tool.required_plan_level) {
+    if (currentUser.nivel_plano < tool.required_plan_level) {
       openUpgradeModal(tool.required_plan_level, getToolName(tool), tool.categoria);
       addToast(
         'info',
-        'Modo de Visualização',
+        'Upgrade Necessário',
         `Esta função requer o ${getPlanNameByLevel(tool.required_plan_level)} ou superior. Faça upgrade para ativá-la no Windows.`
       );
       return {
@@ -1874,16 +1884,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let result;
     if (willBeActive) {
-      result = await optimizationEngine.executeTool(toolId);
+      result = await optimizationEngine.applyTool(toolId, currentUser.nivel_plano);
     } else {
-      result = await optimizationEngine.rollbackTool(toolId);
+      result = await optimizationEngine.rollbackTool(toolId, currentUser.nivel_plano);
     }
 
     setIsOptimizing(false);
     setActiveOptimizingToolId(null);
 
     if (!result.success) {
-      const failMsg = result.error || 'Operação não implementada no DYARTE Agent.';
+      const failMsg = result.error || result.message || 'Operação não implementada no DYARTE Agent.';
       addToast('warning', 'Operação Não Executada', failMsg);
       return {
         success: false,
@@ -1942,16 +1952,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const executeFullSystemOptimization = async (): Promise<{ success: boolean; message: string }> => {
     if (!currentUser) return { success: false, message: 'Usuário não autenticado.' };
 
-    if (currentUser.nivel_plano === 0 || currentUser.status_plano === 'SEM_PLANO') {
-      openUpgradeModal(1, 'Otimização Geral do Sistema', 'SISTEMA');
-      addToast(
-        'info',
-        'Nenhum Plano Ativo',
-        'Sua conta está no Modo de Visualização. Adquira um plano para executar as otimizações do Windows.'
-      );
-      return { success: false, message: 'Plano necessário para executar a otimização geral.' };
-    }
-
     if (config.require_agent_connection && !device.is_agent_connected) {
       addToast(
         'error',
@@ -1961,16 +1961,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Agente desconectado.' };
     }
 
-    // Inform honestly that bulk routines require the corresponding backend agent support
-    addToast(
-      'info',
-      'Rotina Automatizada em Lote',
-      'A otimização geral automatizada em lote requer rotinas de baixo nível implementadas no Agent local. Nenhuma operação fictícia foi executada.'
-    );
-    return {
-      success: false,
-      message: 'Rotina em lote requer implementação correspondente no DYARTE Agent.',
-    };
+    const userLevel = currentUser.nivel_plano || 1;
+    const eligibleTools = tools.filter((t) => t.required_plan_level <= userLevel && t.categoria !== 'GPU');
+
+    let appliedCount = 0;
+    for (const t of eligibleTools) {
+      const res = await optimizationEngine.applyTool(t.tool_id, userLevel);
+      if (res.success) {
+        appliedCount++;
+        setActiveToolsState((prev) => ({ ...prev, [t.tool_id]: true }));
+      }
+    }
+
+    if (appliedCount > 0) {
+      addToast(
+        'success',
+        'Otimização do Sistema Concluída',
+        `${appliedCount} otimização(ões) aplicada(s) com êxito pelo Windows Agent.`
+      );
+      return { success: true, message: `${appliedCount} otimizações aplicadas.` };
+    } else {
+      addToast(
+        'info',
+        'Rotina do Sistema',
+        'Nenhuma rotina foi executada pois as ferramentas selecionadas requerem implementação correspondente no Windows Agent.'
+      );
+      return { success: false, message: 'Nenhuma ferramenta foi executada.' };
+    }
   };
 
   // License manual key activation
@@ -2091,7 +2108,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const adminCreateLicense = (userId: string, planId: PlanId, durationDays: number): License => {
     const targetUser = users.find((u) => u.user_id === userId);
-    const key = `DYARTE-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const rnd = new Uint16Array(3);
+    if (typeof window !== 'undefined' && window.crypto) {
+      window.crypto.getRandomValues(rnd);
+    } else {
+      rnd[0] = 1000 + (Date.now() % 8999);
+      rnd[1] = 2000 + (Date.now() % 7999);
+      rnd[2] = 3000 + (Date.now() % 6999);
+    }
+    const key = `DYARTE-${1000 + (rnd[0] % 9000)}-${1000 + (rnd[1] % 9000)}-${1000 + (rnd[2] % 9000)}`;
     const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     const newLic: License = {
@@ -2223,7 +2248,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Find or create user
     let user = users.find((u) => (u?.email || '').toLowerCase() === safeEmail);
-    const key = `DYARTE-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const rnd = new Uint16Array(3);
+    if (typeof window !== 'undefined' && window.crypto) {
+      window.crypto.getRandomValues(rnd);
+    } else {
+      rnd[0] = 1000 + (Date.now() % 8999);
+      rnd[1] = 2000 + (Date.now() % 7999);
+      rnd[2] = 3000 + (Date.now() % 6999);
+    }
+    const key = `DYARTE-${1000 + (rnd[0] % 9000)}-${1000 + (rnd[1] % 9000)}-${1000 + (rnd[2] % 9000)}`;
     const licId = `lic_wh_${Date.now()}`;
     const expDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
@@ -2378,7 +2411,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toggleSafetyLock,
     isRestoringDefaults,
     restoreWindowsFactoryDefaults,
-    simulateUninstallRollback,
     safetyModalOpen,
     setSafetyModalOpen,
     driverPipeline,
@@ -2404,9 +2436,8 @@ export const useApp = () => {
 
 export const getPlanNameByLevel = (level: PlanLevel): string => {
   switch (level) {
-    case 0:
-      return 'SEM PLANO (VISUALIZAÇÃO)';
     case 1:
+      return 'BÁSICO';
     case 2:
       return 'MÉDIO';
     case 3:
@@ -2414,6 +2445,6 @@ export const getPlanNameByLevel = (level: PlanLevel): string => {
     case 4:
       return 'COMPLETO';
     default:
-      return 'MÉDIO';
+      return 'BÁSICO';
   }
 };
