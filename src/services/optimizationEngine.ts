@@ -46,7 +46,7 @@ export interface IOptimizationHandler {
 
   checkCompatibility(): Promise<{ compatible: boolean; reason?: string }>;
   inspectCurrentState(): Promise<any>;
-  apply(): Promise<OptimizationExecutionResult>;
+  apply(executionToken?: string): Promise<OptimizationExecutionResult>;
   rollback(beforeState?: any): Promise<OptimizationRollbackResult>;
   verify(): Promise<boolean>;
 }
@@ -95,7 +95,21 @@ export class PowerPlanOptimizationHandler implements IOptimizationHandler {
     return status.power_scheme || { error: 'Estado de energia não informado' };
   }
 
-  public async apply(): Promise<OptimizationExecutionResult> {
+  public async apply(executionToken?: string): Promise<OptimizationExecutionResult> {
+    if (!executionToken) {
+      return {
+        success: false,
+        verified: false,
+        state: 'FALHA',
+        beforeState: null,
+        afterState: null,
+        rollbackAvailable: false,
+        durationMs: 0,
+        message: 'Token de execução obrigatório ausente. A otimização deve ser autorizada pelo backend.',
+        error: 'INVALID_TOKEN',
+      };
+    }
+
     const compat = await this.checkCompatibility();
     if (!compat.compatible) {
       return {
@@ -111,7 +125,7 @@ export class PowerPlanOptimizationHandler implements IOptimizationHandler {
       };
     }
 
-    const resp: AgentOptimizationResponse = await agentBridge.requestApplyOptimization(this.id, 10000);
+    const resp: AgentOptimizationResponse = await agentBridge.requestApplyOptimization(this.id, executionToken, 10000);
 
     return {
       success: resp.success,
@@ -120,7 +134,7 @@ export class PowerPlanOptimizationHandler implements IOptimizationHandler {
       beforeState: resp.before_state || null,
       afterState: resp.after_state || null,
       rollbackAvailable: Boolean(resp.rollback_available),
-      durationMs: resp.duration_ms || 0,
+      durationMs: typeof resp.duration_ms === 'number' ? Math.max(0, resp.duration_ms) : 0,
       message: resp.message || (resp.success ? 'Plano de energia aplicado e verificado.' : 'Falha na aplicação.'),
       error: resp.error,
       optimizationId: resp.optimization_id,
@@ -199,35 +213,19 @@ export class GenericAgentOptimizationHandler implements IOptimizationHandler {
     return { status: 'DISPONIVEL', tool_id: this.id };
   }
 
-  public async apply(): Promise<OptimizationExecutionResult> {
-    const compat = await this.checkCompatibility();
-    if (!compat.compatible) {
-      return {
-        success: false,
-        verified: false,
-        state: 'INCOMPATIVEL',
-        beforeState: null,
-        afterState: null,
-        rollbackAvailable: false,
-        durationMs: 0,
-        message: compat.reason || 'Agent offline.',
-        error: compat.reason,
-      };
-    }
-
-    const resp = await agentBridge.requestApplyOptimization(this.id, 8000);
-
+  public async apply(_executionToken?: string): Promise<OptimizationExecutionResult> {
+    // Section 31: GenericAgentOptimizationHandler não deve enviar comandos para ferramentas NOT_IMPLEMENTED.
+    // Retorna diretamente sem comunicar ao Agent.
     return {
-      success: resp.success,
-      verified: Boolean(resp.verified),
-      state: resp.state || (resp.success ? 'APLICADO' : 'DISPONIVEL'),
-      beforeState: resp.before_state || null,
-      afterState: resp.after_state || null,
-      rollbackAvailable: Boolean(resp.rollback_available),
-      durationMs: resp.duration_ms || 0,
-      message: resp.message || 'Rotina não implementada no Agent.',
-      error: resp.error,
-      optimizationId: resp.optimization_id,
+      success: false,
+      verified: false,
+      state: 'DISPONIVEL',
+      beforeState: null,
+      afterState: null,
+      rollbackAvailable: false,
+      durationMs: 0,
+      message: 'Esta ferramenta está em desenvolvimento e não possui rotina nativa implementada no Windows Agent.',
+      error: 'TOOL_NOT_IMPLEMENTED',
     };
   }
 
@@ -315,7 +313,8 @@ export class OptimizationEngine {
    */
   public async applyTool(
     toolId: string,
-    userPlanLevel: PlanLevel = 1
+    userPlanLevel: PlanLevel = 1,
+    executionToken?: string
   ): Promise<OptimizationExecutionResult> {
     const handler = this.getHandler(toolId);
     if (!handler) {
@@ -347,7 +346,7 @@ export class OptimizationEngine {
       };
     }
 
-    return await handler.apply();
+    return await handler.apply(executionToken);
   }
 
   /**
@@ -355,9 +354,10 @@ export class OptimizationEngine {
    */
   public async executeTool(
     toolId: string,
-    userPlanLevel: PlanLevel = 1
+    userPlanLevel: PlanLevel = 1,
+    executionToken?: string
   ): Promise<OptimizationExecutionResult> {
-    return this.applyTool(toolId, userPlanLevel);
+    return this.applyTool(toolId, userPlanLevel, executionToken);
   }
 
   /**

@@ -27,6 +27,7 @@ import {
   INITIAL_ADMIN_LOGS,
 } from '../data/initialData';
 import { detectFullComputerSpecs } from '../utils/hardwareDetection';
+import { isDevFixturesEnabled } from '../data/devFixtures';
 import { LanguageCode, translations } from '../i18n/translations';
 import { auth, db, googleAuthProvider } from '../lib/firebase';
 import {
@@ -252,7 +253,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // fallback
       }
     }
-    return INITIAL_USERS[0]; // Duarte default
+    return isDevFixturesEnabled() ? INITIAL_USERS[0] : null;
   });
 
   const [currentView, setCurrentView] = useState<NavView>(() => {
@@ -1539,15 +1540,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const switchUserRole = (role: 'USER' | 'ADMIN') => {
-    // Only kelberduarte22@gmail.com or authorized admin can toggle simulator mode
+    if (!isDevFixturesEnabled()) {
+      addToast(
+        'warning',
+        'Acesso Restrito',
+        'A alternância local de papéis está desabilitada em produção. As permissões de acesso são gerenciadas com segurança pelo Firebase e pelo Backend.'
+      );
+      return;
+    }
     if (role === 'ADMIN') {
       const adminAcc = users.find((u) => u.email.toLowerCase() === 'kelberduarte22@gmail.com') || INITIAL_USERS[0];
       setCurrentUser(adminAcc);
-      addToast('info', 'Modo Administrador Ativado', 'Você está navegando com privilégios de Administrador Master.');
+      addToast('info', 'Modo Administrador Ativado', 'Você está navegando com privilégios de Administrador Master (Dev).');
     } else {
       const userAcc = users.find((u) => u.role === 'USER') || INITIAL_USERS[2];
       setCurrentUser(userAcc);
-      addToast('info', 'Modo Usuário Ativado', `Você está navegando como ${userAcc.nome}.`);
+      addToast('info', 'Modo Usuário Ativado', `Você está navegando como ${userAcc.nome} (Dev).`);
     }
   };
 
@@ -1725,7 +1733,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // Tool Execution
+  // Backend Optimization Execution Authorization & History Helpers
+  const requestExecutionAuthorization = async (
+    toolId: string,
+    deviceId?: string
+  ): Promise<{
+    success: boolean;
+    authorized: boolean;
+    execution_token?: string;
+    expires_at?: number;
+    error_code?: string;
+    error?: string;
+  }> => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        return {
+          success: false,
+          authorized: false,
+          error_code: 'UNAUTHENTICATED',
+          error: 'Sessão de usuário não autenticada no backend. Faça login novamente.',
+        };
+      }
+      const res = await fetch('/api/tools/execute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          tool_id: toolId,
+          device_id: deviceId || device.device_id,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.authorized || !data.execution_token) {
+        return {
+          success: false,
+          authorized: false,
+          error_code: data.error_code || 'UNAUTHORIZED',
+          error: data.error || 'Autorização negada pelo servidor central.',
+        };
+      }
+      return {
+        success: true,
+        authorized: true,
+        execution_token: data.execution_token,
+        expires_at: data.expires_at,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        authorized: false,
+        error_code: 'NETWORK_ERROR',
+        error: err?.message || 'Falha na comunicação com o servidor de autorização.',
+      };
+    }
+  };
+
+  const recordExecutionResultToBackend = async (payload: {
+    execution_token: string;
+    tool_id: string;
+    status: 'SUCESSO' | 'FALHA' | 'REVERTIDO';
+    verified: boolean;
+    duration_ms: number;
+    result?: string;
+    error?: string;
+    details?: string;
+    before_state?: any;
+    after_state?: any;
+    rollback_available?: boolean;
+    request_id?: string;
+    optimization_id?: string;
+    agent_version?: string;
+    device_id?: string;
+  }): Promise<any> => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) return null;
+      const res = await fetch('/api/tools/record-result', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.record;
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar resultado com backend:', err);
+    }
+    return null;
+  };
+
+  // Tool Execution - Strict Authorized Flow (React -> Backend Token -> AgentBridge -> Windows Agent -> Verify -> Official History)
   const executeOptimizationTool = async (toolId: string): Promise<{ success: boolean; message: string }> => {
     if (!currentUser) {
       return { success: false, message: 'Usuário não autenticado.' };
@@ -1736,8 +1840,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Ferramenta não localizada.' };
     }
 
+    // UX check: implementation status
+    if (tool.implementation_status !== 'IMPLEMENTED') {
+      addToast(
+        'info',
+        'Em Desenvolvimento',
+        `A otimização "${tool.nome}" está em desenvolvimento e não possui rotina nativa implementada no Windows Agent.`
+      );
+      return {
+        success: false,
+        message: 'Esta ferramenta está em desenvolvimento e não possui rotina nativa implementada.',
+      };
+    }
+
     // Strict permission check
-    if (currentUser.nivel_plano < tool.required_plan_level) {
+    if (currentUser.nivel_plano < tool.required_plan_level && currentUser.role !== 'ADMIN') {
       openUpgradeModal(tool.required_plan_level, tool.nome, tool.categoria);
       addToast(
         'info',
@@ -1795,21 +1912,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Execution via real OptimizationEngine linked to DYARTE Agent
-    const result = await optimizationEngine.applyTool(toolId, currentUser.nivel_plano);
+    // 1. Request signed execution token from Backend Authority
+    const authRes = await requestExecutionAuthorization(toolId, device.device_id);
+    if (!authRes.authorized || !authRes.execution_token) {
+      setIsOptimizing(false);
+      setActiveOptimizingToolId(null);
+      const failMsg = authRes.error || 'Autorização negada pelo servidor central.';
+      addToast('error', 'Autorização Negada', failMsg);
+      return { success: false, message: failMsg };
+    }
+
+    // 2. Dispatch execution with signed token through OptimizationEngine to Windows Agent
+    const result = await optimizationEngine.applyTool(
+      toolId,
+      currentUser.nivel_plano,
+      authRes.execution_token
+    );
 
     setIsOptimizing(false);
     setActiveOptimizingToolId(null);
 
-    if (!result.success) {
-      // Never report SUCCESS if operation was not executed or not implemented
-      const failMsg = result.error || result.message || 'Operação não executada pelo DYARTE Agent.';
+    const realDuration = typeof result.durationMs === 'number' ? Math.max(0, result.durationMs) : 0;
+
+    // 3. Strict Verification: only success if executed AND verified by Windows Agent
+    if (!result.success || !result.verified) {
+      const failMsg = result.error || result.message || 'Falha na execução ou verificação pelo Windows Agent.';
+      await recordExecutionResultToBackend({
+        execution_token: authRes.execution_token,
+        tool_id: tool.tool_id,
+        status: 'FALHA',
+        verified: false,
+        duration_ms: realDuration,
+        result: failMsg,
+        error: result.error || 'Falha na verificação',
+        details: tool.details,
+        before_state: result.beforeState,
+        after_state: result.afterState,
+        rollback_available: false,
+        device_id: device.device_id,
+      });
+
       addToast('warning', 'Não Executado pelo Agent', failMsg);
       return { success: false, message: failMsg };
     }
 
+    // 4. Record verified success in official backend history
+    const serverRecord = await recordExecutionResultToBackend({
+      execution_token: authRes.execution_token,
+      tool_id: tool.tool_id,
+      status: 'SUCESSO',
+      verified: true,
+      duration_ms: realDuration,
+      result: result.message || `Otimização aplicada e confirmada pelo Windows Agent: ${tool.nome}.`,
+      details: result.afterState
+        ? `Antes: ${JSON.stringify(result.beforeState)} | Depois: ${JSON.stringify(result.afterState)}`
+        : tool.details,
+      before_state: result.beforeState,
+      after_state: result.afterState,
+      rollback_available: result.rollbackAvailable,
+      device_id: device.device_id,
+    });
+
     const historyItem: OptimizationHistoryItem = {
-      history_id: `hist_${Date.now()}`,
+      history_id: serverRecord?.history_id || `hist_${Date.now()}`,
       user_id: currentUser.user_id,
       tool_id: tool.tool_id,
       tool_name: tool.nome,
@@ -1817,7 +1982,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: 'Hoje às ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       status: 'SUCESSO',
       result: result.message || `Otimização aplicada e confirmada pelo Windows Agent: ${tool.nome}.`,
-      duration_ms: result.durationMs || 150,
+      duration_ms: realDuration,
       details: result.afterState
         ? `Antes: ${JSON.stringify(result.beforeState)} | Depois: ${JSON.stringify(result.afterState)}`
         : tool.details,
@@ -1833,7 +1998,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(updatedUser);
     setUsers((prev) => prev.map((u) => (u.user_id === updatedUser.user_id ? updatedUser : u)));
 
-    addToast('success', 'Otimização Concluída', `${tool.nome} aplicada com êxito no Windows.`);
+    addToast('success', 'Otimização Concluída', `${tool.nome} aplicada e verificada com êxito no Windows.`);
     return { success: true, message: 'Otimização aplicada com sucesso pelo Agente Windows.' };
   };
 
@@ -1849,8 +2014,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Ferramenta não localizada.' };
     }
 
+    if (tool.implementation_status !== 'IMPLEMENTED') {
+      addToast('info', 'Em Desenvolvimento', `A otimização "${tool.nome}" está em desenvolvimento nativo.`);
+      return { success: false, message: 'Ferramenta não implementada.' };
+    }
+
     // Strict permission check
-    if (currentUser.nivel_plano < tool.required_plan_level) {
+    if (currentUser.nivel_plano < tool.required_plan_level && currentUser.role !== 'ADMIN') {
       openUpgradeModal(tool.required_plan_level, getToolName(tool), tool.categoria);
       addToast(
         'info',
@@ -1884,7 +2054,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let result;
     if (willBeActive) {
-      result = await optimizationEngine.applyTool(toolId, currentUser.nivel_plano);
+      const authRes = await requestExecutionAuthorization(toolId, device.device_id);
+      if (!authRes.authorized || !authRes.execution_token) {
+        setIsOptimizing(false);
+        setActiveOptimizingToolId(null);
+        const errText = authRes.error || 'Autorização negada pelo servidor central.';
+        addToast('error', 'Autorização Negada', errText);
+        return { success: false, message: errText, active: currentlyActive };
+      }
+
+      result = await optimizationEngine.applyTool(toolId, currentUser.nivel_plano, authRes.execution_token);
+      if (result.success && result.verified) {
+        await recordExecutionResultToBackend({
+          execution_token: authRes.execution_token,
+          tool_id: tool.tool_id,
+          status: 'SUCESSO',
+          verified: true,
+          duration_ms: typeof result.durationMs === 'number' ? Math.max(0, result.durationMs) : 0,
+          result: `Otimização ativada e confirmada pelo Agent: ${getToolName(tool)}.`,
+          details: tool.details,
+          before_state: result.beforeState,
+          after_state: result.afterState,
+          rollback_available: result.rollbackAvailable,
+          device_id: device.device_id,
+        });
+      }
     } else {
       result = await optimizationEngine.rollbackTool(toolId, currentUser.nivel_plano);
     }
@@ -1892,8 +2086,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsOptimizing(false);
     setActiveOptimizingToolId(null);
 
-    if (!result.success) {
-      const failMsg = result.error || result.message || 'Operação não implementada no DYARTE Agent.';
+    if (!result.success || (willBeActive && !result.verified)) {
+      const failMsg = result.error || result.message || 'Operação não executada pelo DYARTE Agent.';
       addToast('warning', 'Operação Não Executada', failMsg);
       return {
         success: false,
@@ -1910,6 +2104,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const toolTitle = getToolName(tool);
+    const realDuration = typeof (result as any).durationMs === 'number' ? Math.max(0, (result as any).durationMs) : 0;
 
     const historyItem: OptimizationHistoryItem = {
       history_id: `hist_${Date.now()}`,
@@ -1922,7 +2117,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       result: willBeActive
         ? `Otimização ativada e confirmada pelo Agent: ${toolTitle}.`
         : `Otimização desativada e confirmada pelo Agent: ${toolTitle}.`,
-      duration_ms: 120,
+      duration_ms: realDuration,
       details: willBeActive ? tool.details : 'Configuração padrão do Windows restaurada pelo Agent.',
     };
 
@@ -1962,11 +2157,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const userLevel = currentUser.nivel_plano || 1;
-    const eligibleTools = tools.filter((t) => t.required_plan_level <= userLevel && t.categoria !== 'GPU');
+    // Section 29 & 30: Filter strictly by IMPLEMENTED, SAFE, and plan level
+    const eligibleTools = tools.filter(
+      (t) =>
+        t.implementation_status === 'IMPLEMENTED' &&
+        t.risk_level === 'SAFE' &&
+        t.required_plan_level <= userLevel &&
+        t.categoria !== 'GPU'
+    );
+
+    if (eligibleTools.length === 0) {
+      addToast(
+        'info',
+        'Rotina do Sistema',
+        'Nenhuma otimização segura com rotina nativa implementada está disponível para execução em lote no momento.'
+      );
+      return { success: false, message: 'Nenhuma ferramenta implementada disponível para execução em lote.' };
+    }
 
     let appliedCount = 0;
     for (const t of eligibleTools) {
-      const res = await optimizationEngine.applyTool(t.tool_id, userLevel);
+      const res = await executeOptimizationTool(t.tool_id);
       if (res.success) {
         appliedCount++;
         setActiveToolsState((prev) => ({ ...prev, [t.tool_id]: true }));
@@ -1982,11 +2193,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true, message: `${appliedCount} otimizações aplicadas.` };
     } else {
       addToast(
-        'info',
-        'Rotina do Sistema',
-        'Nenhuma rotina foi executada pois as ferramentas selecionadas requerem implementação correspondente no Windows Agent.'
+        'warning',
+        'Falha na Otimização',
+        'As ferramentas selecionadas não puderam ser verificadas pelo Windows Agent.'
       );
-      return { success: false, message: 'Nenhuma ferramenta foi executada.' };
+      return { success: false, message: 'Falha na aplicação das otimizações.' };
     }
   };
 
@@ -2274,7 +2485,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         data_expiracao: expDate,
         license_id: licId,
         status_licenca: 'ATIVA',
-        device_id: 'DESKTOP-AUTO-PROVISIONED',
+        device_id: 'N/D',
         ultimo_login: 'Nunca',
         role: 'USER',
         status: 'ATIVO',

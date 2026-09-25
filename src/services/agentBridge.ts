@@ -29,7 +29,9 @@ export interface AgentOptimizationResponse {
   duration_ms?: number;
   message?: string;
   error?: string;
+  error_code?: string;
   optimization_id?: string;
+  request_id?: string;
 }
 
 export interface AgentStatusResponse {
@@ -522,21 +524,34 @@ class AgentBridgeService {
    * Solicita aplicação de otimização por ID
    */
   public async applyOptimization(
-    toolId: string
+    toolId: string,
+    executionToken: string
   ): Promise<AgentOptimizationResponse> {
-    return this.requestApplyOptimization(toolId);
+    return this.requestApplyOptimization(toolId, executionToken);
   }
 
   public async requestApplyOptimization(
     toolId: string,
-    timeoutMs = 8000
+    executionToken: string,
+    timeoutMs = 10000
   ): Promise<AgentOptimizationResponse> {
     if (this.connectionState !== 'AGENT_ONLINE') {
       return {
         success: false,
         state: 'FALHA',
         verified: false,
+        error_code: 'AGENT_OFFLINE',
         error: 'DYARTE Agent não conectado no Windows (127.0.0.1:49152).',
+      };
+    }
+
+    if (!executionToken) {
+      return {
+        success: false,
+        state: 'FALHA',
+        verified: false,
+        error_code: 'INVALID_TOKEN',
+        error: 'Token de autorização assinado ausente. Solicite autorização ao backend antes de executar.',
       };
     }
 
@@ -549,7 +564,9 @@ class AgentBridgeService {
           success: false,
           state: 'FALHA',
           verified: false,
+          error_code: 'APPLY_FAILED',
           error: 'Tempo limite esgotado aguardando resposta do DYARTE Agent.',
+          request_id: requestId,
         });
       }, timeoutMs);
 
@@ -564,10 +581,12 @@ class AgentBridgeService {
               before_state: resp.before_state,
               after_state: resp.after_state,
               rollback_available: Boolean(resp.rollback_available),
-              duration_ms: resp.duration_ms,
+              duration_ms: typeof resp.duration_ms === 'number' ? Math.max(0, resp.duration_ms) : 0,
               message: resp.message,
               error: resp.error || (!resp.success ? resp.message : undefined),
+              error_code: resp.error_code,
               optimization_id: resp.optimization_id,
+              request_id: resp.request_id || requestId,
             });
           } else if (resp.type === 'ERROR') {
             resolve({
@@ -575,6 +594,8 @@ class AgentBridgeService {
               state: 'FALHA',
               verified: false,
               error: resp.error || 'Erro reportado pelo Agent.',
+              error_code: resp.error_code || 'APPLY_FAILED',
+              request_id: resp.request_id || requestId,
             });
           } else {
             resolve({
@@ -582,12 +603,14 @@ class AgentBridgeService {
               state: 'FALHA',
               verified: false,
               error: 'Resposta inesperada do Agent.',
+              error_code: 'PROTOCOL_MISMATCH',
+              request_id: resp.request_id || requestId,
             });
           }
         },
         reject: (err) => {
           clearTimeout(timer);
-          resolve({ success: false, state: 'FALHA', verified: false, error: err.message });
+          resolve({ success: false, state: 'FALHA', verified: false, error: err.message, request_id: requestId });
         },
         timer,
       });
@@ -597,6 +620,7 @@ class AgentBridgeService {
         request_id: requestId,
         type: 'APPLY_OPTIMIZATION',
         tool_id: toolId,
+        execution_token: executionToken,
         timestamp: Date.now(),
       });
     });

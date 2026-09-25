@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -7,6 +8,14 @@ import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json';
 import { CANONICAL_TOOLS_MAP } from './src/data/canonicalCatalog';
+import {
+  validateServerSigningConfiguration,
+  generateOptimizationExecutionToken,
+  verifyOptimizationExecutionToken,
+} from './src/security/serverTokens';
+
+// Validate Ed25519 signing key on server startup (fails immediately if missing/invalid)
+validateServerSigningConfiguration();
 
 const app = express();
 const PORT = 3000;
@@ -274,14 +283,15 @@ app.post('/api/license/validate', requireAuth, async (req: AuthenticatedRequest,
   }
 });
 
-// Authorize Optimization Tool - Protected with Server-Side Canonical Registry & License Validation
+// Authorize Optimization Tool - Protected with Server-Side Canonical Registry, Implementation Status & Signed Token
 app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { tool_id } = req.body;
+    const { tool_id, device_id } = req.body;
     const user = req.userDoc;
+    const uid = req.user!.uid;
 
     if (!tool_id || typeof tool_id !== 'string') {
-      return res.status(400).json({ success: false, error: 'tool_id é obrigatório.' });
+      return res.status(400).json({ success: false, authorized: false, error_code: 'REQUEST_INVALID', error: 'tool_id é obrigatório.' });
     }
 
     // Consult canonical registry on backend authority
@@ -289,7 +299,19 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
     if (!canonicalTool) {
       return res.status(400).json({
         success: false,
+        authorized: false,
+        error_code: 'TOOL_NOT_FOUND',
         error: 'Ferramenta não reconhecida no catálogo oficial de otimizações do sistema.',
+      });
+    }
+
+    // Section 7: Validate implementation_status
+    if (canonicalTool.implementation_status !== 'IMPLEMENTED') {
+      return res.status(400).json({
+        success: false,
+        authorized: false,
+        error_code: 'TOOL_NOT_IMPLEMENTED',
+        error: `A ferramenta '${canonicalTool.nome}' está em desenvolvimento e não possui rotina nativa implementada no Windows Agent.`,
       });
     }
 
@@ -301,6 +323,8 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
     if (userLevel < reqLevel && !isAdmin) {
       return res.status(403).json({
         success: false,
+        authorized: false,
+        error_code: 'PLAN_INSUFFICIENT',
         error: `Recurso bloqueado. Esta otimização requer o Plano Nível ${reqLevel} (${reqLevel === 2 ? 'Médio' : reqLevel === 3 ? 'Avançado' : 'Completo'}). Seu plano atual é nível ${userLevel}.`,
       });
     }
@@ -309,20 +333,41 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
     if (reqLevel > 1 && user.status_licenca !== 'ATIVA' && !isAdmin) {
       return res.status(403).json({
         success: false,
+        authorized: false,
+        error_code: 'LICENSE_INVALID',
         error: `Sua licença está com status ${user.status_licenca || 'PENDENTE'}. Ative uma licença válida para executar otimizações avançadas.`,
       });
     }
+
+    // Account status check
+    if (user.status_conta === 'SUSPENSA' || user.status_conta === 'BANIDA') {
+      return res.status(403).json({
+        success: false,
+        authorized: false,
+        error_code: 'ACCOUNT_SUSPENDED',
+        error: 'Sua conta está suspensa. Entre em contato com o suporte DYARTE.',
+      });
+    }
+
+    // Bind to authorized device
+    const targetDeviceId = (typeof device_id === 'string' && device_id.trim()) ? device_id.trim() : (user.device_id || 'N/D');
+
+    // Generate cryptographic execution token (Ed25519 signed, 60s TTL, random nonce)
+    const executionToken = generateOptimizationExecutionToken(tool_id, uid, targetDeviceId, 60);
+    const expiresAt = Math.floor(Date.now() / 1000) + 60;
 
     res.json({
       success: true,
       authorized: true,
       tool_id,
+      execution_token: executionToken,
+      expires_at: expiresAt,
       required_plan_level: reqLevel,
-      message: 'Otimização autorizada pelo servidor central. Dispare a execução local através do DYARTE Agent.',
+      message: 'Execução autorizada com sucesso. Token criptográfico emitido para o Windows Agent.',
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Erro na autorização da ferramenta:', error);
-    res.status(500).json({ error: 'Erro ao processar autorização da otimização no servidor.' });
+    res.status(500).json({ success: false, authorized: false, error: 'Erro ao processar autorização da otimização no servidor.' });
   }
 });
 
@@ -330,6 +375,8 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
 app.post('/api/tools/record-result', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const {
+      execution_token,
+      request_id,
       optimization_id,
       device_id,
       tool_id,
@@ -342,37 +389,76 @@ app.post('/api/tools/record-result', requireAuth, async (req: AuthenticatedReque
       verified,
       rollback_available,
       error,
+      details,
     } = req.body;
 
     const uid = req.user!.uid;
 
     if (!tool_id || !status) {
-      return res.status(400).json({ error: 'tool_id e status são obrigatórios.' });
+      return res.status(400).json({ error: 'tool_id e status são obrigatórios.', error_code: 'REQUEST_INVALID' });
+    }
+
+    // Section 25 & 26: Validate execution token before recording result
+    if (!execution_token || typeof execution_token !== 'string') {
+      return res.status(400).json({
+        error: 'Gravação rejeitada: ausente execution_token assinado.',
+        error_code: 'INVALID_TOKEN',
+      });
+    }
+
+    const tokenVerification = verifyOptimizationExecutionToken(execution_token, tool_id, device_id);
+    if (!tokenVerification.valid || !tokenVerification.payload) {
+      return res.status(403).json({
+        error: tokenVerification.error || 'Token de execução inválido ou expirado.',
+        error_code: tokenVerification.error_code || 'INVALID_TOKEN',
+      });
+    }
+
+    if (tokenVerification.payload.user_id !== uid && req.userDoc?.role !== 'ADMIN') {
+      return res.status(403).json({
+        error: 'Token emitido para usuário diferente do autenticado.',
+        error_code: 'TOKEN_USER_MISMATCH',
+      });
     }
 
     const canonicalTool = CANONICAL_TOOLS[tool_id];
     const toolName = canonicalTool?.nome || tool_id;
     const category = canonicalTool?.categoria || 'SISTEMA';
 
-    const historyId = optimization_id || `hist_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    // Section 24 & 26: Success strict mode:
+    // Somente registrar SUCESSO quando: execution_token válido + Agent confirmou + success=true + verified=true
+    let finalStatus: 'SUCESSO' | 'FALHA' | 'REVERTIDO' = 'FALHA';
+    if (status === 'REVERTIDO' && verified) {
+      finalStatus = 'REVERTIDO';
+    } else if (status === 'SUCESSO' && verified) {
+      finalStatus = 'SUCESSO';
+    } else {
+      finalStatus = 'FALHA';
+    }
+
+    const historyId = optimization_id || `hist_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const realDuration = typeof duration_ms === 'number' ? Math.max(0, duration_ms) : 0;
 
     const record = {
       history_id: historyId,
       user_id: uid,
-      device_id: device_id || req.userDoc?.device_id || 'N/D',
+      device_id: device_id || tokenVerification.payload.device_id || 'N/D',
       tool_id,
       tool_name: toolName,
       category,
       date: new Date().toISOString(),
-      status: status === 'SUCESSO' || status === 'REVERTIDO' ? status : 'FALHA',
-      result: result || (status === 'SUCESSO' ? 'Otimização aplicada e confirmada.' : 'Operação falhou.'),
-      duration_ms: typeof duration_ms === 'number' ? Math.max(0, duration_ms) : 0,
-      agent_version: agent_version || '1.1.0',
+      status: finalStatus,
+      result: result || (finalStatus === 'SUCESSO' ? 'Otimização aplicada e confirmada pelo Agent.' : 'Operação falhou na execução ou verificação.'),
+      duration_ms: realDuration,
+      details: typeof details === 'string' && details ? details : (finalStatus === 'SUCESSO' ? 'Configuração validada no subsistema do Windows.' : error || 'Verificação rejeitada.'),
       before_state: before_state || null,
       after_state: after_state || null,
-      verified: Boolean(verified),
-      rollback_available: Boolean(rollback_available),
+      agent_version: agent_version || '1.1.0',
       error: error || null,
+      rollback_available: Boolean(rollback_available),
+      verified: Boolean(verified),
+      request_id: request_id || null,
+      optimization_id: optimization_id || null,
     };
 
     await adminDb.collection('optimization_history').doc(historyId).set(record);
@@ -454,6 +540,26 @@ app.post('/api/webhook/cakto', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Parâmetros de email e plano são obrigatórios.' });
     }
 
+    const safeTxId = typeof transaction_id === 'string' ? transaction_id.trim() : '';
+    if (!safeTxId) {
+      return res.status(400).json({
+        error: 'transaction_id é obrigatório para processamento idempotente do pagamento.',
+        error_code: 'MISSING_TRANSACTION_ID',
+      });
+    }
+
+    // Idempotency check: if transaction_id was already processed, do not create duplicate license
+    const existingTxSnap = await adminDb.collection('licenses').where('transaction_id', '==', safeTxId).get();
+    if (!existingTxSnap.empty) {
+      const existingLic = existingTxSnap.docs[0].data();
+      return res.json({
+        success: true,
+        already_processed: true,
+        message: 'Transação já processada anteriormente (idempotência preservada).',
+        license_id: existingLic.license_id,
+      });
+    }
+
     const safeEmail = String(email).trim().toLowerCase();
     const safePlanId = String(plan_id).trim().toLowerCase();
 
@@ -502,7 +608,7 @@ app.post('/api/webhook/cakto', async (req: Request, res: Response) => {
       activated_at: new Date().toISOString(),
       expires_at: expiresAt,
       device_id: userDoc.data().device_id || 'PENDENTE',
-      transaction_id: transaction_id || `tx_${Date.now()}`,
+      transaction_id: safeTxId,
     });
 
     await recordAdminLog('WEBHOOK_CAKTO_PURCHASE', 'system_webhook', uid, `Pagamento aprovado para plano ${planName}. Licença ${newLicenseId} criada.`);

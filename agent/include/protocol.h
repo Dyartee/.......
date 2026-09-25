@@ -147,7 +147,8 @@ public:
         bool rollbackAvailable,
         int64_t durationMs,
         const std::string& errorMsg = "",
-        const std::string& message = ""
+        const std::string& message = "",
+        const std::string& errorCode = ""
     ) {
         std::stringstream ss;
         ss << "{\"protocol_version\":1"
@@ -163,6 +164,9 @@ public:
            << ",\"rollback_available\":" << (rollbackAvailable ? "true" : "false")
            << ",\"duration_ms\":" << durationMs
            << ",\"agent_version\":\"" << ProtocolConstants::AGENT_VERSION << "\"";
+        if (!errorCode.empty()) {
+            ss << ",\"error_code\":\"" << EscapeString(errorCode) << "\"";
+        }
         if (!errorMsg.empty()) {
             ss << ",\"error\":\"" << EscapeString(errorMsg) << "\"";
         } else {

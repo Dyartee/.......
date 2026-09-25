@@ -12,6 +12,7 @@
 #include "protocol.h"
 #include "websocket_server.h"
 #include "json_helper.h"
+#include "token_validator.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -429,13 +430,66 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
 
         case MessageType::APPLY_OPTIMIZATION: {
             std::string toolId = json.get_field_string("tool_id", "");
+            std::string executionToken = json.get_field_string("execution_token", "");
+            int64_t protocolVersion = json.get_field_int64("protocol_version", 1);
+
             Logger::Instance().Info("APPLY_OPTIMIZATION received for tool: " + toolId + " (Request ID: " + requestId + ")");
 
-            if (toolId.empty()) {
-                std::string response = ResponseBuilder::BuildError(requestId, "tool_id obrigatorio para aplicacao de otimizacao.", "INVALID_TOOL");
+            if (protocolVersion != 1) {
+                std::string response = ResponseBuilder::BuildError(requestId, "Versao do protocolo invalida.", "PROTOCOL_MISMATCH");
                 g_serverInstance->SendTextMessage(clientSock, response);
                 break;
             }
+
+            if (toolId.empty()) {
+                std::string response = ResponseBuilder::BuildError(requestId, "tool_id obrigatorio para aplicacao de otimizacao.", "REQUEST_INVALID");
+                g_serverInstance->SendTextMessage(clientSock, response);
+                break;
+            }
+
+            if (executionToken.empty()) {
+                std::string response = ResponseBuilder::BuildOptimizationAuditResult(
+                    requestId,
+                    toolId,
+                    "FALHA",
+                    false,
+                    false,
+                    "{}",
+                    "{}",
+                    false,
+                    0,
+                    "Token de autorizacao assinado obrigatorio nao fornecido.",
+                    "Execucao negada pelo Agent: ausente execution_token assinado.",
+                    "INVALID_TOKEN"
+                );
+                g_serverInstance->SendTextMessage(clientSock, response);
+                Logger::Instance().Warn("APPLY_OPTIMIZATION rejected: missing execution_token.");
+                break;
+            }
+
+            std::string persistentDeviceId = GetPersistentDeviceId();
+            TokenValidationResult tokenRes = TokenValidator::ValidateToken(toolId, executionToken, persistentDeviceId);
+            if (!tokenRes.valid) {
+                Logger::Instance().Warn("APPLY_OPTIMIZATION rejected by TokenValidator: " + tokenRes.error + " (Code: " + tokenRes.errorCode + ")");
+                std::string response = ResponseBuilder::BuildOptimizationAuditResult(
+                    requestId,
+                    toolId,
+                    "FALHA",
+                    false,
+                    false,
+                    "{}",
+                    "{}",
+                    false,
+                    0,
+                    tokenRes.error,
+                    "Execucao rejeitada por validacao criptografica do Agent.",
+                    tokenRes.errorCode
+                );
+                g_serverInstance->SendTextMessage(clientSock, response);
+                break;
+            }
+
+            Logger::Instance().Info("Execution Token cryptographically verified for tool: " + toolId + " (User: " + tokenRes.userId + ")");
 
             if (toolId == "tool_perf_power_plan") {
                 auto startTime = std::chrono::steady_clock::now();
@@ -574,7 +628,8 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                 false,
                 0,
                 "TOOL_NOT_IMPLEMENTED: Esta otimização está em desenvolvimento e não possui rotina nativa no Windows Agent.",
-                "Rotina nativa ainda não disponível no Agent."
+                "Rotina nativa ainda não disponível no Agent.",
+                "TOOL_NOT_IMPLEMENTED"
             );
             g_serverInstance->SendTextMessage(clientSock, response);
             Logger::Instance().Warn("APPLY_OPTIMIZATION: Routine not implemented for tool " + toolId);

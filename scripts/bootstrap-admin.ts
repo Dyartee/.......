@@ -7,7 +7,9 @@
  *   npx tsx scripts/bootstrap-admin.ts <email-ou-uid>
  */
 
-import admin from 'firebase-admin';
+import { initializeApp, getApps } from 'firebase-admin/app';
+import { getAuth, UserRecord } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 async function bootstrapAdmin() {
   const targetIdentifier = process.argv[2];
@@ -18,18 +20,18 @@ async function bootstrapAdmin() {
   }
 
   // Inicializa Firebase Admin se ainda não inicializado
-  if (!admin.apps.length) {
+  if (!getApps().length) {
     const projectId = process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || 'dyarte-optimizer';
-    admin.initializeApp({
+    initializeApp({
       projectId,
     });
   }
 
-  const auth = admin.auth();
-  const db = admin.firestore();
+  const auth = getAuth();
+  const db = getFirestore();
 
   try {
-    let userRecord: admin.auth.UserRecord;
+    let userRecord: UserRecord;
 
     if (targetIdentifier.includes('@')) {
       console.log(`Buscando usuário por e-mail: ${targetIdentifier}...`);
@@ -60,7 +62,7 @@ async function bootstrapAdmin() {
         plano_atual: 'COMPLETO',
         nivel_plano: 4,
         status_plano: 'ATIVO',
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        updated_at: FieldValue.serverTimestamp(),
       },
       { merge: true }
     );

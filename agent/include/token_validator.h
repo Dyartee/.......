@@ -4,6 +4,8 @@
 #include <vector>
 #include <chrono>
 #include <cstdint>
+#include <unordered_map>
+#include <mutex>
 #include "ed25519_verify.h"
 #include "json_helper.h"
 #include "logger.h"
@@ -11,25 +13,28 @@
 namespace Dyarte {
 namespace Agent {
 
-// Result of token validation
+// Result of cryptographic token validation
 struct TokenValidationResult {
     bool valid = false;
     std::string toolId;
     std::string userId;
+    std::string deviceId;
     std::string nonce;
     int64_t exp = 0;
+    std::string errorCode;
     std::string error;
 };
 
 class TokenValidator {
 public:
     // Official public key for DYARTE OPTIMIZER backend execution authority (32-byte Ed25519 raw pubkey)
+    // Corresponds to public key hex: 6412366338ce65c1d1f9792847def61e9b052d357ea26d5252d34c9c16aaf00d
     static const uint8_t* GetServerPublicKey() {
         static const uint8_t kServerPubKey[32] = {
-            0x8f, 0xb7, 0x58, 0x71, 0x0c, 0x6a, 0xd3, 0xe9,
-            0x47, 0x65, 0x68, 0xd5, 0xea, 0x8c, 0x20, 0x63,
-            0xaa, 0x54, 0x6b, 0x44, 0x71, 0x1f, 0x54, 0x01,
-            0x17, 0x65, 0xb8, 0x9d, 0x99, 0x46, 0x63, 0xde
+            0x64, 0x12, 0x36, 0x63, 0x38, 0xce, 0x65, 0xc1,
+            0xd1, 0xf9, 0x79, 0x28, 0x47, 0xde, 0xf6, 0x1e,
+            0x9b, 0x05, 0x2d, 0x35, 0x7e, 0xa2, 0x6d, 0x52,
+            0x52, 0xd3, 0x4c, 0x9c, 0x16, 0xaa, 0xf0, 0x0d
         };
         return kServerPubKey;
     }
@@ -75,19 +80,67 @@ public:
     }
 
     /**
-     * Validates an optimization execution token against the expected toolId.
+     * Checks if a nonce was already consumed (replay protection).
+     * If not consumed, stores the nonce until expiration.
+     */
+    static bool CheckAndConsumeNonce(const std::string& nonce, int64_t exp) {
+        if (nonce.empty()) return false;
+
+        static std::unordered_map<std::string, int64_t> s_consumedNonces;
+        static std::mutex s_nonceMutex;
+        static const size_t kMaxNonces = 10000;
+
+        std::lock_guard<std::mutex> lock(s_nonceMutex);
+
+        auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+
+        // Periodic cleanup of expired nonces
+        if (s_consumedNonces.size() > 500) {
+            for (auto it = s_consumedNonces.begin(); it != s_consumedNonces.end(); ) {
+                if (it->second < nowSec - 60) {
+                    it = s_consumedNonces.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        // Hard cap on memory size
+        if (s_consumedNonces.size() >= kMaxNonces) {
+            s_consumedNonces.clear();
+        }
+
+        // Replay check
+        if (s_consumedNonces.find(nonce) != s_consumedNonces.end()) {
+            return false; // Replay detected!
+        }
+
+        s_consumedNonces[nonce] = exp;
+        return true;
+    }
+
+    /**
+     * Validates an optimization execution token against the expected toolId and device.
      * Format: <base64url(payload)>.<base64url(signature)>
      */
-    static TokenValidationResult ValidateToken(const std::string& expectedToolId, const std::string& tokenStr) {
+    static TokenValidationResult ValidateToken(
+        const std::string& expectedToolId,
+        const std::string& tokenStr,
+        const std::string& localDeviceId = ""
+    ) {
         TokenValidationResult res;
 
         if (tokenStr.empty()) {
+            res.errorCode = "INVALID_TOKEN";
             res.error = "Token de autorizacao ausente no payload.";
             return res;
         }
 
         size_t dotPos = tokenStr.find('.');
         if (dotPos == std::string::npos) {
+            res.errorCode = "INVALID_TOKEN";
             res.error = "Formato de token invalido: ausente delimitador de assinatura.";
             return res;
         }
@@ -99,44 +152,81 @@ public:
         std::vector<uint8_t> sigBytes = Base64UrlDecode(sigB64);
 
         if (payloadBytes.empty() || sigBytes.size() != 64) {
+            res.errorCode = "INVALID_TOKEN";
             res.error = "Comprimento ou decodificacao de assinatura invalida.";
             return res;
         }
 
-        // Verify cryptographic signature with embedded public key
+        // 1. Verify cryptographic signature with embedded public key
         bool sigValid = Ed25519::Verify(sigBytes.data(), payloadBytes.data(), payloadBytes.size(), GetServerPublicKey());
         if (!sigValid) {
             Logger::Instance().Warn("[Security] Cryptographic signature check FAILED for optimization token.");
+            res.errorCode = "TOKEN_SIGNATURE_INVALID";
             res.error = "Assinatura criptografica do servidor rejeitada.";
             return res;
         }
 
-        // Parse payload JSON
+        // 2. Parse payload JSON
         std::string payloadStr(reinterpret_cast<const char*>(payloadBytes.data()), payloadBytes.size());
         JsonValue payloadJson = JsonValue::parse(payloadStr);
 
         if (!payloadJson.is_object()) {
+            res.errorCode = "INVALID_TOKEN";
             res.error = "Conteudo de token assinado nao e um JSON valido.";
+            return res;
+        }
+
+        int64_t protocolVersion = payloadJson.get_field_int64("protocol_version", 1);
+        if (protocolVersion != 1) {
+            res.errorCode = "PROTOCOL_MISMATCH";
+            res.error = "Versao de protocolo do token incompativel.";
             return res;
         }
 
         res.toolId = payloadJson.get_field_string("tool_id", "");
         res.userId = payloadJson.get_field_string("user_id", "");
+        res.deviceId = payloadJson.get_field_string("device_id", "");
         res.nonce = payloadJson.get_field_string("nonce", "");
         res.exp = payloadJson.get_field_int64("exp", 0);
 
+        // 3. Validate tool_id matching
         if (res.toolId != expectedToolId) {
+            res.errorCode = "TOKEN_TOOL_MISMATCH";
             res.error = "Token emitido para ferramenta '" + res.toolId + "' nao corresponde a ferramenta solicitada '" + expectedToolId + "'.";
             return res;
         }
 
+        // 4. Validate user_id present
+        if (res.userId.empty()) {
+            res.errorCode = "TOKEN_USER_MISMATCH";
+            res.error = "Token de autorizacao sem identificador de usuario valido.";
+            return res;
+        }
+
+        // 5. Validate device_id matching if both are present
+        if (!localDeviceId.empty() && !res.deviceId.empty() && res.deviceId != "N/D" && localDeviceId != "N/D") {
+            if (res.deviceId != localDeviceId) {
+                res.errorCode = "DEVICE_MISMATCH";
+                res.error = "Dispositivo do token ('" + res.deviceId + "') nao corresponde ao identificador do Agent ('" + localDeviceId + "').";
+                return res;
+            }
+        }
+
+        // 6. Validate expiration with 15-second clock skew grace period
         auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()
         ).count();
 
-        // Grace period of 15 seconds for clock skew
         if (res.exp < (nowSec - 15)) {
+            res.errorCode = "TOKEN_EXPIRED";
             res.error = "Token de autorizacao expirado no servidor.";
+            return res;
+        }
+
+        // 7. Validate nonce and check for replay
+        if (res.nonce.empty() || !CheckAndConsumeNonce(res.nonce, res.exp)) {
+            res.errorCode = "TOKEN_REPLAY";
+            res.error = "Token de autorizacao ja consumido anteriormente (replay detectado).";
             return res;
         }
 
