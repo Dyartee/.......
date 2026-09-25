@@ -24,7 +24,10 @@ export interface OptimizationExecutionResult {
   durationMs: number;
   message: string;
   error?: string;
+  error_code?: string;
   optimizationId?: string;
+  receipt?: any;
+  receiptSignature?: string;
 }
 
 export interface OptimizationRollbackResult {
@@ -34,7 +37,10 @@ export interface OptimizationRollbackResult {
   restoredState: any;
   message: string;
   error?: string;
+  error_code?: string;
   optimizationId?: string;
+  receipt?: any;
+  receiptSignature?: string;
 }
 
 export interface IOptimizationHandler {
@@ -47,7 +53,7 @@ export interface IOptimizationHandler {
   checkCompatibility(): Promise<{ compatible: boolean; reason?: string }>;
   inspectCurrentState(): Promise<any>;
   apply(executionToken?: string): Promise<OptimizationExecutionResult>;
-  rollback(beforeState?: any): Promise<OptimizationRollbackResult>;
+  rollback(beforeState?: any, executionToken?: string): Promise<OptimizationRollbackResult>;
   verify(): Promise<boolean>;
 }
 
@@ -137,11 +143,14 @@ export class PowerPlanOptimizationHandler implements IOptimizationHandler {
       durationMs: typeof resp.duration_ms === 'number' ? Math.max(0, resp.duration_ms) : 0,
       message: resp.message || (resp.success ? 'Plano de energia aplicado e verificado.' : 'Falha na aplicação.'),
       error: resp.error,
+      error_code: resp.error_code,
       optimizationId: resp.optimization_id,
+      receipt: resp.receipt,
+      receiptSignature: resp.receipt_signature,
     };
   }
 
-  public async rollback(beforeState?: any): Promise<OptimizationRollbackResult> {
+  public async rollback(beforeState?: any, executionToken?: string): Promise<OptimizationRollbackResult> {
     if (agentBridge.getState() !== 'AGENT_ONLINE') {
       return {
         success: false,
@@ -150,10 +159,23 @@ export class PowerPlanOptimizationHandler implements IOptimizationHandler {
         restoredState: null,
         message: 'Reversão falhou: Windows Agent offline.',
         error: 'Agent offline',
+        error_code: 'AGENT_OFFLINE',
       };
     }
 
-    const resp: AgentOptimizationResponse = await agentBridge.requestRollbackOptimization(this.id, 10000);
+    if (!executionToken) {
+      return {
+        success: false,
+        verified: false,
+        state: 'FALHA',
+        restoredState: null,
+        message: 'Token de autorização assinado ausente para rollback.',
+        error: 'INVALID_TOKEN',
+        error_code: 'INVALID_TOKEN',
+      };
+    }
+
+    const resp: AgentOptimizationResponse = await agentBridge.requestRollbackOptimization(this.id, executionToken, 10000);
 
     return {
       success: resp.success,
@@ -162,7 +184,10 @@ export class PowerPlanOptimizationHandler implements IOptimizationHandler {
       restoredState: resp.after_state || beforeState || null,
       message: resp.message || (resp.success ? 'Plano de energia restaurado com sucesso.' : 'Falha ao reverter.'),
       error: resp.error,
+      error_code: resp.error_code,
       optimizationId: resp.optimization_id,
+      receipt: resp.receipt,
+      receiptSignature: resp.receipt_signature,
     };
   }
 
@@ -214,7 +239,7 @@ export class GenericAgentOptimizationHandler implements IOptimizationHandler {
   }
 
   public async apply(_executionToken?: string): Promise<OptimizationExecutionResult> {
-    // Section 31: GenericAgentOptimizationHandler não deve enviar comandos para ferramentas NOT_IMPLEMENTED.
+    // Section 15: GenericAgentOptimizationHandler não deve enviar comandos para ferramentas NOT_IMPLEMENTED.
     // Retorna diretamente sem comunicar ao Agent.
     return {
       success: false,
@@ -226,31 +251,19 @@ export class GenericAgentOptimizationHandler implements IOptimizationHandler {
       durationMs: 0,
       message: 'Esta ferramenta está em desenvolvimento e não possui rotina nativa implementada no Windows Agent.',
       error: 'TOOL_NOT_IMPLEMENTED',
+      error_code: 'TOOL_NOT_IMPLEMENTED',
     };
   }
 
-  public async rollback(beforeState?: any): Promise<OptimizationRollbackResult> {
-    if (agentBridge.getState() !== 'AGENT_ONLINE') {
-      return {
-        success: false,
-        verified: false,
-        state: 'FALHA',
-        restoredState: null,
-        message: 'Agent offline.',
-        error: 'Agent offline',
-      };
-    }
-
-    const resp = await agentBridge.requestRollbackOptimization(this.id, 8000);
-
+  public async rollback(_beforeState?: any, _executionToken?: string): Promise<OptimizationRollbackResult> {
     return {
-      success: resp.success,
-      verified: Boolean(resp.verified),
-      state: resp.state || 'DISPONIVEL',
-      restoredState: resp.after_state || beforeState || null,
-      message: resp.message || 'Reversão não aplicável.',
-      error: resp.error,
-      optimizationId: resp.optimization_id,
+      success: false,
+      verified: false,
+      state: 'DISPONIVEL',
+      restoredState: null,
+      message: 'Esta ferramenta está em desenvolvimento e não possui rotina nativa de reversão implementada.',
+      error: 'TOOL_NOT_IMPLEMENTED',
+      error_code: 'TOOL_NOT_IMPLEMENTED',
     };
   }
 
@@ -366,7 +379,8 @@ export class OptimizationEngine {
   public async rollbackTool(
     toolId: string,
     userPlanLevel: PlanLevel = 1,
-    beforeState?: any
+    beforeState?: any,
+    executionToken?: string
   ): Promise<OptimizationRollbackResult> {
     const handler = this.getHandler(toolId);
     if (!handler) {
@@ -377,6 +391,7 @@ export class OptimizationEngine {
         restoredState: null,
         message: `Ferramenta '${toolId}' não registrada.`,
         error: 'FERRAMENTA_NAO_ENCONTRADA',
+        error_code: 'TOOL_NOT_FOUND',
       };
     }
 
@@ -388,10 +403,11 @@ export class OptimizationEngine {
         restoredState: null,
         message: 'Permissão de plano insuficiente para reversão.',
         error: 'PLANO_INSUFICIENTE',
+        error_code: 'PLAN_INSUFFICIENT',
       };
     }
 
-    return await handler.rollback(beforeState);
+    return await handler.rollback(beforeState, executionToken);
   }
 }
 

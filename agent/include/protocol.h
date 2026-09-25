@@ -148,7 +148,9 @@ public:
         int64_t durationMs,
         const std::string& errorMsg = "",
         const std::string& message = "",
-        const std::string& errorCode = ""
+        const std::string& errorCode = "",
+        const std::string& receiptJson = "",
+        const std::string& receiptSignature = ""
     ) {
         std::stringstream ss;
         ss << "{\"protocol_version\":1"
@@ -162,7 +164,7 @@ public:
            << ",\"before_state\":" << (beforeStateJson.empty() ? "{}" : beforeStateJson)
            << ",\"after_state\":" << (afterStateJson.empty() ? "{}" : afterStateJson)
            << ",\"rollback_available\":" << (rollbackAvailable ? "true" : "false")
-           << ",\"duration_ms\":" << durationMs
+           << ",\"duration_ms\":" << (durationMs < 0 ? 0 : durationMs)
            << ",\"agent_version\":\"" << ProtocolConstants::AGENT_VERSION << "\"";
         if (!errorCode.empty()) {
             ss << ",\"error_code\":\"" << EscapeString(errorCode) << "\"";
@@ -174,6 +176,12 @@ public:
         }
         if (!message.empty()) {
             ss << ",\"message\":\"" << EscapeString(message) << "\"";
+        }
+        if (!receiptJson.empty()) {
+            ss << ",\"receipt\":" << receiptJson;
+        }
+        if (!receiptSignature.empty()) {
+            ss << ",\"receipt_signature\":\"" << EscapeString(receiptSignature) << "\"";
         }
         ss << "}";
         return ss.str();
@@ -192,7 +200,8 @@ public:
         const std::string& storage = "",
         const std::string& motherboard = "",
         const std::string& biosVersion = "",
-        bool secureBoot = false
+        int secureBootState = -1,
+        const std::string& agentPublicKey = ""
     ) {
         std::stringstream ss;
         ss << "{\"protocol_version\":1"
@@ -207,13 +216,20 @@ public:
            << ",\"name\":\"" << EscapeString(activePowerSchemeName) << "\""
            << "}";
         if (!deviceId.empty()) ss << ",\"device_id\":\"" << EscapeString(deviceId) << "\"";
+        if (!agentPublicKey.empty()) ss << ",\"agent_public_key\":\"" << EscapeString(agentPublicKey) << "\"";
         if (!cpu.empty()) ss << ",\"cpu\":\"" << EscapeString(cpu) << "\"";
         if (!gpu.empty()) ss << ",\"gpu\":\"" << EscapeString(gpu) << "\"";
         if (!ram.empty()) ss << ",\"ram\":\"" << EscapeString(ram) << "\"";
         if (!storage.empty()) ss << ",\"storage\":\"" << EscapeString(storage) << "\"";
         if (!motherboard.empty()) ss << ",\"motherboard\":\"" << EscapeString(motherboard) << "\"";
         if (!biosVersion.empty()) ss << ",\"bios_version\":\"" << EscapeString(biosVersion) << "\"";
-        ss << ",\"secure_boot\":" << (secureBoot ? "true" : "false");
+        if (secureBootState == 1) {
+            ss << ",\"secure_boot\":true";
+        } else if (secureBootState == 0) {
+            ss << ",\"secure_boot\":false";
+        } else {
+            ss << ",\"secure_boot\":null";
+        }
         ss << ",\"capabilities\":{\"telemetry\":true,\"power_plan\":" << (isWindows ? "true" : "false")
            << ",\"rollback\":" << (isWindows ? "true" : "false") << ",\"hardware_telemetry\":true}";
         ss << "}";

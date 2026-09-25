@@ -32,6 +32,8 @@ export interface AgentOptimizationResponse {
   error_code?: string;
   optimization_id?: string;
   request_id?: string;
+  receipt?: any;
+  receipt_signature?: string;
 }
 
 export interface AgentStatusResponse {
@@ -44,13 +46,14 @@ export interface AgentStatusResponse {
     name: string;
   };
   device_id?: string;
+  agent_public_key?: string;
   cpu?: string;
   gpu?: string;
   ram?: string;
   storage?: string;
   motherboard?: string;
   bios_version?: string;
-  secure_boot?: boolean;
+  secure_boot?: boolean | null;
   error?: string;
 }
 
@@ -587,6 +590,8 @@ class AgentBridgeService {
               error_code: resp.error_code,
               optimization_id: resp.optimization_id,
               request_id: resp.request_id || requestId,
+              receipt: resp.receipt,
+              receipt_signature: resp.receipt_signature,
             });
           } else if (resp.type === 'ERROR') {
             resolve({
@@ -627,20 +632,32 @@ class AgentBridgeService {
   }
 
   /**
-   * Solicita rollback específico
+   * Solicita rollback específico com token de autorização
    */
   public async rollbackOptimization(
-    toolId: string
+    toolId: string,
+    executionToken?: string
   ): Promise<AgentOptimizationResponse> {
-    return this.requestRollbackOptimization(toolId);
+    return this.requestRollbackOptimization(toolId, executionToken);
   }
 
   public async requestRollbackOptimization(
     toolId: string,
+    executionToken?: string,
     timeoutMs = 8000
   ): Promise<AgentOptimizationResponse> {
     if (this.connectionState !== 'AGENT_ONLINE') {
-      return { success: false, state: 'FALHA', verified: false, error: 'DYARTE Agent offline.' };
+      return { success: false, state: 'FALHA', verified: false, error: 'DYARTE Agent offline.', error_code: 'AGENT_OFFLINE' };
+    }
+
+    if (!executionToken) {
+      return {
+        success: false,
+        state: 'FALHA',
+        verified: false,
+        error: 'Token de autorização assinado ausente para rollback.',
+        error_code: 'INVALID_TOKEN',
+      };
     }
 
     const requestId = generateRequestId('rbk');
@@ -653,6 +670,8 @@ class AgentBridgeService {
           state: 'FALHA',
           verified: false,
           error: 'Tempo limite esgotado aguardando reversão do DYARTE Agent.',
+          error_code: 'ROLLBACK_FAILED',
+          request_id: requestId,
         });
       }, timeoutMs);
 
@@ -667,10 +686,14 @@ class AgentBridgeService {
               before_state: resp.before_state,
               after_state: resp.after_state,
               rollback_available: false,
-              duration_ms: resp.duration_ms,
+              duration_ms: typeof resp.duration_ms === 'number' ? Math.max(0, resp.duration_ms) : 0,
               message: resp.message,
               error: resp.error || (!resp.success ? resp.message : undefined),
+              error_code: resp.error_code,
               optimization_id: resp.optimization_id,
+              request_id: resp.request_id || requestId,
+              receipt: resp.receipt,
+              receipt_signature: resp.receipt_signature,
             });
           } else if (resp.type === 'ERROR') {
             resolve({
@@ -678,6 +701,8 @@ class AgentBridgeService {
               state: 'FALHA',
               verified: false,
               error: resp.error || 'Erro reportado pelo Agent.',
+              error_code: resp.error_code || 'ROLLBACK_FAILED',
+              request_id: resp.request_id || requestId,
             });
           } else {
             resolve({
@@ -685,12 +710,14 @@ class AgentBridgeService {
               state: 'FALHA',
               verified: false,
               error: 'Resposta inesperada do Agent.',
+              error_code: 'PROTOCOL_MISMATCH',
+              request_id: resp.request_id || requestId,
             });
           }
         },
         reject: (err) => {
           clearTimeout(timer);
-          resolve({ success: false, state: 'FALHA', verified: false, error: err.message });
+          resolve({ success: false, state: 'FALHA', verified: false, error: err.message, request_id: requestId });
         },
         timer,
       });
@@ -700,6 +727,7 @@ class AgentBridgeService {
         request_id: requestId,
         type: 'ROLLBACK_OPTIMIZATION',
         tool_id: toolId,
+        execution_token: executionToken,
         timestamp: Date.now(),
       });
     });

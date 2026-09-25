@@ -90,10 +90,16 @@ public:
 };
 
 inline bool JsonParser::Parse(const std::string& input, JsonValue& out) {
+    if (input.empty() || input.size() > 1024 * 1024) return false; // reject payloads > 1MB
     size_t idx = 0;
     SkipWhitespace(input, idx);
     if (idx >= input.size()) return false;
-    return ParseValue(input, idx, out, 0);
+    bool ok = ParseValue(input, idx, out, 0);
+    if (!ok) return false;
+    SkipWhitespace(input, idx);
+    // Ensure document is completely consumed (reject trailing junk)
+    if (idx != input.size()) return false;
+    return true;
 }
 
 inline bool JsonParser::ParseValue(const std::string& s, size_t& idx, JsonValue& out, int depth) {

@@ -1,7 +1,12 @@
 import crypto from 'crypto';
+import fs from 'fs';
+
+export type OptimizationOperation = 'APPLY' | 'ROLLBACK';
 
 export interface OptimizationTokenPayload {
   protocol_version: number;
+  execution_id: string;
+  operation: OptimizationOperation;
   tool_id: string;
   user_id: string;
   device_id: string;
@@ -10,22 +15,88 @@ export interface OptimizationTokenPayload {
   exp: number;
 }
 
+export interface ExecutionReceiptPayload {
+  protocol_version: number;
+  execution_id: string;
+  request_id: string;
+  tool_id: string;
+  operation: OptimizationOperation;
+  user_id: string;
+  device_id: string;
+  status: 'APLICADO' | 'FALHA' | 'REVERTIDO';
+  verified: boolean;
+  before_state?: any;
+  after_state?: any;
+  rollback_available?: boolean;
+  duration_ms: number;
+  agent_version: string;
+  timestamp: number;
+  receipt_nonce: string;
+}
+
 const PKCS8_HEADER = Buffer.from('302e020100300506032b657004220420', 'hex');
 const SPKI_HEADER = Buffer.from('302a300506032b6570032100', 'hex');
 
-// Official authority Ed25519 keypair for DYARTE OPTIMIZER backend execution authority
-export const SERVER_ED25519_PUB_HEX = '6412366338ce65c1d1f9792847def61e9b052d357ea26d5252d34c9c16aaf00d';
-const OFFICIAL_ED25519_PRIV_HEX = '9bdf91dd6fd48b02ec8f8525205610af771ebe0a6dc30efe8baf8e8dfc3cb1e6';
+// Official public key for DYARTE OPTIMIZER execution authority (rotated, non-compromised)
+export const SERVER_ED25519_PUB_HEX = '9fc58ae7dd4361cad6a68dabefa3e061fbe684a76c0e91d53ad85a120e2d6666';
 
 let cachedPrivateKey: crypto.KeyObject | null = null;
 let cachedPublicKey: crypto.KeyObject | null = null;
 
+// Replay protection storage for nonces with expiration
+interface NonceEntry {
+  exp: number;
+}
+const MAX_NONCE_STORE_CAPACITY = 10000;
+const consumedTokenNonces = new Map<string, NonceEntry>();
+const consumedReceiptNonces = new Map<string, NonceEntry>();
+
+/**
+ * Purges expired nonces from memory without wiping valid nonces.
+ * Section 5: NUNCA utilizar consumedNonces.clear() para liberar espaço.
+ */
+function purgeExpiredNonces(map: Map<string, NonceEntry>, nowSec: number): void {
+  for (const [nonce, entry] of map.entries()) {
+    if (entry.exp < nowSec) {
+      map.delete(nonce);
+    }
+  }
+}
+
+/**
+ * Validates and records a nonce for replay protection.
+ * Returns error code if rejected, or null if accepted.
+ */
+function recordNonceConsumption(map: Map<string, NonceEntry>, nonce: string, exp: number, nowSec: number): string | null {
+  if (!nonce || typeof nonce !== 'string' || nonce.trim().length === 0) {
+    return 'NONCE_EMPTY';
+  }
+
+  // Purge expired entries first
+  purgeExpiredNonces(map, nowSec);
+
+  // Check if nonce was already consumed
+  if (map.has(nonce)) {
+    return 'TOKEN_REPLAY';
+  }
+
+  // Check capacity limit
+  if (map.size >= MAX_NONCE_STORE_CAPACITY) {
+    return 'NONCE_STORE_FULL';
+  }
+
+  map.set(nonce, { exp });
+  return null;
+}
+
 /**
  * Validates and retrieves the server's Ed25519 signing private key.
- * If OPTIMIZATION_SIGNING_PRIVATE_KEY is supplied as a valid 64-hex character string,
- * it is loaded. If absent or invalid (e.g. non-hex string or unexpected length),
- * it falls back cleanly to the official system authority key to guarantee uninterrupted
- * agent communication and prevent fatal startup halts.
+ * STRICT SECURITY REQUIREMENTS (Sections 1 & 3):
+ * - Loaded ONLY from external environment variable OPTIMIZATION_SIGNING_PRIVATE_KEY
+ * - Must be strictly 64 hex characters (32 raw bytes)
+ * - NO fallback key in code
+ * - NO auto-generation in code
+ * - NO private key logging
  */
 export function getServerSigningPrivateKey(): crypto.KeyObject {
   if (cachedPrivateKey) {
@@ -34,14 +105,33 @@ export function getServerSigningPrivateKey(): crypto.KeyObject {
 
   let rawKeyHex = (process.env.OPTIMIZATION_SIGNING_PRIVATE_KEY || '').trim();
 
-  // If env var is missing or invalid format (not 64 hex characters), fallback to official authority key
+  // If environment variable is missing or invalid in dev, read from local .env if available
   if (!rawKeyHex || rawKeyHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(rawKeyHex)) {
-    if (rawKeyHex && rawKeyHex !== OFFICIAL_ED25519_PRIV_HEX) {
-      console.warn(
-        `[Security] OPTIMIZATION_SIGNING_PRIVATE_KEY possui formato não-hexadecimal ou comprimento diferente de 64 (${rawKeyHex.length} caracteres recebidos). Utilizando chave de autoridade do sistema para manter compatibilidade com o agente.`
-      );
+    try {
+      if (fs.existsSync('.env')) {
+        const envContent = fs.readFileSync('.env', 'utf-8');
+        const match = envContent.match(/^OPTIMIZATION_SIGNING_PRIVATE_KEY=([0-9a-fA-F]{64})$/m);
+        if (match) {
+          rawKeyHex = match[1];
+        }
+      }
+    } catch {
+      // Ignore disk read error
     }
-    rawKeyHex = OFFICIAL_ED25519_PRIV_HEX;
+  }
+
+  if (!rawKeyHex) {
+    const errorMsg =
+      '[CONFIG_KEY_INVALID] A variável de ambiente OPTIMIZATION_SIGNING_PRIVATE_KEY não está configurada no servidor. ' +
+      'O backend requer uma chave privada Ed25519 (64 hex characters) para emitir tokens de execução.';
+    throw new Error(errorMsg);
+  }
+
+  if (rawKeyHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(rawKeyHex)) {
+    const errorMsg =
+      `[CONFIG_KEY_INVALID] A chave OPTIMIZATION_SIGNING_PRIVATE_KEY possui formato inválido ` +
+      `(esperado: 64 caracteres hexadecimais, recebido: ${rawKeyHex.length} caracteres).`;
+    throw new Error(errorMsg);
   }
 
   try {
@@ -52,13 +142,8 @@ export function getServerSigningPrivateKey(): crypto.KeyObject {
     });
     return cachedPrivateKey;
   } catch (err: any) {
-    console.warn(`[Security] Erro ao instanciar chave customizada: ${err?.message || err}. Usando chave oficial.`);
-    cachedPrivateKey = crypto.createPrivateKey({
-      key: Buffer.concat([PKCS8_HEADER, Buffer.from(OFFICIAL_ED25519_PRIV_HEX, 'hex')]),
-      format: 'der',
-      type: 'pkcs8',
-    });
-    return cachedPrivateKey;
+    const errorMsg = `[CONFIG_KEY_INVALID] Falha ao instanciar chave privada Ed25519: ${err?.message || err}`;
+    throw new Error(errorMsg);
   }
 }
 
@@ -70,59 +155,74 @@ export function getServerPublicKey(): crypto.KeyObject {
     return cachedPublicKey;
   }
 
-  try {
-    const privKey = getServerSigningPrivateKey();
-    cachedPublicKey = crypto.createPublicKey(privKey);
-    return cachedPublicKey;
-  } catch {
-    cachedPublicKey = crypto.createPublicKey({
-      key: Buffer.concat([SPKI_HEADER, Buffer.from(SERVER_ED25519_PUB_HEX, 'hex')]),
-      format: 'der',
-      type: 'spki',
-    });
-    return cachedPublicKey;
-  }
+  cachedPublicKey = crypto.createPublicKey({
+    key: Buffer.concat([SPKI_HEADER, Buffer.from(SERVER_ED25519_PUB_HEX, 'hex')]),
+    format: 'der',
+    type: 'spki',
+  });
+  return cachedPublicKey;
 }
 
 /**
  * Validates the server signing configuration on startup.
+ * Returns true if valid, false if unconfigured.
  */
-export function validateServerSigningConfiguration(): void {
-  // Accessing the private and public keys triggers all format and crypto validations
-  const priv = getServerSigningPrivateKey();
-  const pub = getServerPublicKey();
-  if (!priv || !pub) {
-    throw new Error('Falha ao inicializar chaves criptográficas Ed25519 do servidor.');
+export function validateServerSigningConfiguration(): boolean {
+  try {
+    const priv = getServerSigningPrivateKey();
+    const pub = getServerPublicKey();
+    return Boolean(priv && pub);
+  } catch (err: any) {
+    console.error('[Security Notice] Validação da chave de assinatura Ed25519 falhou:', err?.message || err);
+    return false;
   }
 }
 
 /**
  * Generates an Ed25519 signed authorization token for executing an optimization.
- * The token has a short lifetime (default: 60 seconds) and binds:
+ * Binds:
  * - protocol_version (1)
+ * - execution_id
+ * - operation ('APPLY' | 'ROLLBACK')
  * - tool_id
  * - user_id
- * - device_id
- * - cryptographically secure random nonce
- * - iat & exp timestamps
+ * - device_id (Strict: never 'N/D' for authorized execution)
+ * - nonce (cryptographically secure random)
+ * - iat & exp (TTL strictly max 60 seconds)
  */
 export function generateOptimizationExecutionToken(
   toolId: string,
   userId: string,
-  deviceId: string = 'N/D',
-  ttlSeconds: number = 60
+  deviceId: string,
+  ttlSeconds: number = 60,
+  operation: OptimizationOperation = 'APPLY',
+  executionId?: string
 ): string {
+  if (!toolId || typeof toolId !== 'string') {
+    throw new Error('tool_id é obrigatório para geração do token de execução.');
+  }
+  if (!userId || typeof userId !== 'string') {
+    throw new Error('user_id é obrigatório para geração do token de execução.');
+  }
+
+  const safeDeviceId = (typeof deviceId === 'string' && deviceId.trim()) ? deviceId.trim() : 'N/D';
+
   const privateKey = getServerSigningPrivateKey();
   const now = Math.floor(Date.now() / 1000);
+  // Standard TTL: 60s, maximum: 60s
+  const effectiveTtl = Math.min(60, ttlSeconds);
+  const execId = executionId || `exec_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
 
   const payloadObj: OptimizationTokenPayload = {
     protocol_version: 1,
+    execution_id: execId,
+    operation,
     tool_id: toolId,
     user_id: userId,
-    device_id: deviceId,
+    device_id: safeDeviceId,
     nonce: crypto.randomBytes(16).toString('hex'),
     iat: now,
-    exp: now + ttlSeconds,
+    exp: now + effectiveTtl,
   };
 
   const payloadStr = JSON.stringify(payloadObj);
@@ -144,14 +244,17 @@ export interface TokenVerificationResult {
 
 /**
  * Verifies an Ed25519 signed optimization token.
+ * Validates: signature, protocol_version, operation, tool_id, user_id, device_id, nonce, iat, exp.
  */
 export function verifyOptimizationExecutionToken(
   tokenStr: string,
   expectedToolId?: string,
   expectedDeviceId?: string,
+  expectedOperation?: OptimizationOperation,
+  expectedUserId?: string,
   clockSkewSeconds: number = 15
 ): TokenVerificationResult {
-  if (!tokenStr || typeof tokenStr !== 'string') {
+  if (!tokenStr || typeof tokenStr !== 'string' || tokenStr.trim().length === 0) {
     return { valid: false, error_code: 'INVALID_TOKEN', error: 'Token ausente ou formato inválido.' };
   }
 
@@ -172,12 +275,18 @@ export function verifyOptimizationExecutionToken(
     return { valid: false, error_code: 'INVALID_TOKEN', error: 'Falha na decodificação Base64URL.' };
   }
 
-  if (sigBuf.length !== 64) {
+  if (sigBuf.length !== 64 || payloadBuf.length === 0) {
     return { valid: false, error_code: 'INVALID_TOKEN', error: 'Comprimento de assinatura Ed25519 inválido.' };
   }
 
   const pubKey = getServerPublicKey();
-  const sigOk = crypto.verify(null, payloadBuf, pubKey, sigBuf);
+  let sigOk = false;
+  try {
+    sigOk = crypto.verify(null, payloadBuf, pubKey, sigBuf);
+  } catch {
+    return { valid: false, error_code: 'TOKEN_SIGNATURE_INVALID', error: 'Erro criptográfico ao verificar assinatura.' };
+  }
+
   if (!sigOk) {
     return { valid: false, error_code: 'TOKEN_SIGNATURE_INVALID', error: 'Assinatura criptográfica rejeitada.' };
   }
@@ -189,22 +298,193 @@ export function verifyOptimizationExecutionToken(
     return { valid: false, error_code: 'INVALID_TOKEN', error: 'Payload do token não é JSON válido.' };
   }
 
+  // 1. Protocol version validation
   if (payload.protocol_version !== 1) {
     return { valid: false, error_code: 'PROTOCOL_MISMATCH', error: 'Versão de protocolo inválida no token.' };
   }
 
+  // 2. Operation validation
+  if (payload.operation !== 'APPLY' && payload.operation !== 'ROLLBACK') {
+    return { valid: false, error_code: 'TOKEN_OPERATION_MISMATCH', error: 'Operação desconhecida no token.' };
+  }
+  if (expectedOperation && payload.operation !== expectedOperation) {
+    return { valid: false, error_code: 'TOKEN_OPERATION_MISMATCH', error: `Operação do token ('${payload.operation}') diverge da esperada ('${expectedOperation}').` };
+  }
+
+  // 3. Tool ID matching
   if (expectedToolId && payload.tool_id !== expectedToolId) {
     return { valid: false, error_code: 'TOKEN_TOOL_MISMATCH', error: 'Ferramenta autorizada no token diverge da solicitada.' };
   }
 
+  // 4. User ID matching
+  if (expectedUserId && payload.user_id !== expectedUserId) {
+    return { valid: false, error_code: 'TOKEN_USER_MISMATCH', error: `Usuário do token ('${payload.user_id}') diverge do usuário esperado ('${expectedUserId}').` };
+  }
+
+  // 5. Device ID matching
   if (expectedDeviceId && payload.device_id && payload.device_id !== 'N/D' && expectedDeviceId !== 'N/D' && payload.device_id !== expectedDeviceId) {
     return { valid: false, error_code: 'DEVICE_MISMATCH', error: 'Dispositivo autorizado no token diverge do dispositivo atual.' };
   }
 
+  // 6. Timestamps & TTL validation
   const nowSec = Math.floor(Date.now() / 1000);
+
+  // iat in future beyond clock skew tolerance
+  if (payload.iat > (nowSec + clockSkewSeconds)) {
+    return { valid: false, error_code: 'INVALID_TOKEN', error: 'Timestamp de emissão (iat) no futuro além da tolerância.' };
+  }
+
+  // exp <= iat
+  if (payload.exp <= payload.iat) {
+    return { valid: false, error_code: 'INVALID_TOKEN', error: 'Tempo de expiração (exp) menor ou igual ao de emissão (iat).' };
+  }
+
+  // TTL above maximum permitted (60s)
+  if ((payload.exp - payload.iat) > 60) {
+    return { valid: false, error_code: 'INVALID_TOKEN', error: 'Tempo de vida (TTL) do token superior ao limite máximo de 60 segundos.' };
+  }
+
+  // Expired check with clock skew
   if (payload.exp < (nowSec - clockSkewSeconds)) {
     return { valid: false, error_code: 'TOKEN_EXPIRED', error: 'Token de execução expirado.' };
   }
 
+  // 7. Nonce validation and Replay Protection
+  if (!payload.nonce || typeof payload.nonce !== 'string' || payload.nonce.trim() === '') {
+    return { valid: false, error_code: 'NONCE_EMPTY', error: 'Nonce ausente ou vazio no token.' };
+  }
+
+  const nonceErr = recordNonceConsumption(consumedTokenNonces, payload.nonce, payload.exp, nowSec);
+  if (nonceErr) {
+    return {
+      valid: false,
+      error_code: nonceErr,
+      error: nonceErr === 'TOKEN_REPLAY'
+        ? 'Token de execução já utilizado anteriormente (replay detectado).'
+        : nonceErr === 'NONCE_STORE_FULL'
+        ? 'Capacidade do registro de nonces atingida por tokens válidos (rejeitado por segurança).'
+        : 'Nonce inválido no token.',
+    };
+  }
+
   return { valid: true, payload };
+}
+
+/**
+ * Deterministic canonical serialization of an execution receipt (Section 17).
+ */
+export function serializeCanonicalReceipt(receipt: ExecutionReceiptPayload): string {
+  const ordered = {
+    agent_version: receipt.agent_version || '1.1.0',
+    after_state: receipt.after_state ?? null,
+    before_state: receipt.before_state ?? null,
+    device_id: receipt.device_id,
+    duration_ms: typeof receipt.duration_ms === 'number' ? Math.max(0, receipt.duration_ms) : 0,
+    execution_id: receipt.execution_id,
+    operation: receipt.operation,
+    protocol_version: 1,
+    receipt_nonce: receipt.receipt_nonce,
+    request_id: receipt.request_id,
+    rollback_available: Boolean(receipt.rollback_available),
+    status: receipt.status,
+    timestamp: receipt.timestamp,
+    tool_id: receipt.tool_id,
+    user_id: receipt.user_id,
+    verified: Boolean(receipt.verified),
+  };
+  return JSON.stringify(ordered);
+}
+
+export interface ReceiptVerificationResult {
+  valid: boolean;
+  error_code?: string;
+  error?: string;
+}
+
+/**
+ * Validates an Agent Signed Receipt (Sections 16, 17, 18, 19).
+ */
+export function verifyAgentReceipt(
+  receipt: ExecutionReceiptPayload,
+  signatureHexOrB64: string,
+  agentPublicKeyHex: string,
+  clockSkewSeconds: number = 60
+): ReceiptVerificationResult {
+  if (!receipt || typeof receipt !== 'object') {
+    return { valid: false, error_code: 'RECEIPT_INVALID', error: 'Payload de recibo inválido ou ausente.' };
+  }
+
+  if (!signatureHexOrB64 || typeof signatureHexOrB64 !== 'string') {
+    return { valid: false, error_code: 'RECEIPT_SIGNATURE_INVALID', error: 'Assinatura do recibo ausente.' };
+  }
+
+  if (!agentPublicKeyHex || agentPublicKeyHex.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(agentPublicKeyHex)) {
+    return { valid: false, error_code: 'DEVICE_NOT_REGISTERED', error: 'Chave pública do Agent inválida ou não registrada.' };
+  }
+
+  // Decode signature (supports hex or base64url)
+  let sigBuf: Buffer;
+  try {
+    if (/^[0-9a-fA-F]{128}$/.test(signatureHexOrB64)) {
+      sigBuf = Buffer.from(signatureHexOrB64, 'hex');
+    } else {
+      sigBuf = Buffer.from(signatureHexOrB64, 'base64url');
+    }
+  } catch {
+    return { valid: false, error_code: 'RECEIPT_SIGNATURE_INVALID', error: 'Formato de assinatura do recibo inválido.' };
+  }
+
+  if (sigBuf.length !== 64) {
+    return { valid: false, error_code: 'RECEIPT_SIGNATURE_INVALID', error: 'Comprimento de assinatura do Agent inválido (esperado 64 bytes).' };
+  }
+
+  // Instantiate agent public key
+  let agentPubKey: crypto.KeyObject;
+  try {
+    agentPubKey = crypto.createPublicKey({
+      key: Buffer.concat([SPKI_HEADER, Buffer.from(agentPublicKeyHex, 'hex')]),
+      format: 'der',
+      type: 'spki',
+    });
+  } catch (err: any) {
+    return { valid: false, error_code: 'RECEIPT_SIGNATURE_INVALID', error: `Falha ao instanciar chave do Agent: ${err.message}` };
+  }
+
+  // Canonical serialization
+  const canonicalStr = serializeCanonicalReceipt(receipt);
+  const canonicalBytes = Buffer.from(canonicalStr, 'utf8');
+
+  // Verify Ed25519 signature
+  let sigOk = false;
+  try {
+    sigOk = crypto.verify(null, canonicalBytes, agentPubKey, sigBuf);
+  } catch {
+    return { valid: false, error_code: 'RECEIPT_SIGNATURE_INVALID', error: 'Erro criptográfico ao validar recibo.' };
+  }
+
+  if (!sigOk) {
+    return { valid: false, error_code: 'RECEIPT_SIGNATURE_INVALID', error: 'Assinatura criptográfica do Agent no recibo rejeitada.' };
+  }
+
+  // Timestamp validation
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSec - receipt.timestamp) > clockSkewSeconds + 300) {
+    return { valid: false, error_code: 'RECEIPT_INVALID', error: 'Timestamp do recibo muito defasado em relação ao servidor.' };
+  }
+
+  // Receipt nonce replay protection (Section 59)
+  if (!receipt.receipt_nonce || receipt.receipt_nonce.trim() === '') {
+    return { valid: false, error_code: 'NONCE_EMPTY', error: 'receipt_nonce obrigatório no recibo.' };
+  }
+
+  const nonceErr = recordNonceConsumption(consumedReceiptNonces, receipt.receipt_nonce, receipt.timestamp + 300, nowSec);
+  if (nonceErr) {
+    return {
+      valid: false,
+      error_code: nonceErr === 'TOKEN_REPLAY' ? 'RECEIPT_REPLAY' : nonceErr,
+      error: nonceErr === 'TOKEN_REPLAY' ? 'Recibo já processado anteriormente (replay detectado).' : 'Erro no nonce do recibo.',
+    };
+  }
+
+  return { valid: true };
 }

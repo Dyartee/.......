@@ -13,6 +13,7 @@
 #include "websocket_server.h"
 #include "json_helper.h"
 #include "token_validator.h"
+#include "agent_identity.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -123,29 +124,45 @@ static fs::path GetSnapshotPath(const std::string& deviceId, const std::string& 
 
 static bool SavePersistentSnapshot(
     const std::string& optimizationId,
+    const std::string& executionId,
     const std::string& deviceId,
     const std::string& toolId,
     const std::string& beforeStateJson,
     const std::string& targetStateJson
 ) {
-    fs::path path = GetSnapshotPath(deviceId, toolId);
-    std::ofstream ofs(path);
-    if (!ofs.is_open()) return false;
+    fs::path finalPath = GetSnapshotPath(deviceId, toolId);
+    fs::path tmpPath = finalPath;
+    tmpPath.replace_extension(".tmp");
 
-    auto now = std::chrono::system_clock::now();
-    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    {
+        std::ofstream ofs(tmpPath, std::ios::trunc);
+        if (!ofs.is_open()) return false;
 
-    ofs << "{\n"
-        << "  \"optimization_id\": \"" << optimizationId << "\",\n"
-        << "  \"device_id\": \"" << deviceId << "\",\n"
-        << "  \"tool_id\": \"" << toolId << "\",\n"
-        << "  \"created_at\": " << nowMs << ",\n"
-        << "  \"agent_version\": \"" << ProtocolConstants::AGENT_VERSION << "\",\n"
-        << "  \"before_state\": " << (beforeStateJson.empty() ? "{}" : beforeStateJson) << ",\n"
-        << "  \"target_state\": " << (targetStateJson.empty() ? "{}" : targetStateJson) << ",\n"
-        << "  \"rollback_supported\": true\n"
-        << "}\n";
-    return true;
+        auto now = std::chrono::system_clock::now();
+        auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+        ofs << "{\n"
+            << "  \"optimization_id\": \"" << optimizationId << "\",\n"
+            << "  \"execution_id\": \"" << executionId << "\",\n"
+            << "  \"device_id\": \"" << deviceId << "\",\n"
+            << "  \"tool_id\": \"" << toolId << "\",\n"
+            << "  \"created_at\": " << nowMs << ",\n"
+            << "  \"agent_version\": \"" << ProtocolConstants::AGENT_VERSION << "\",\n"
+            << "  \"before_state\": " << (beforeStateJson.empty() ? "{}" : beforeStateJson) << ",\n"
+            << "  \"target_state\": " << (targetStateJson.empty() ? "{}" : targetStateJson) << ",\n"
+            << "  \"rollback_supported\": true\n"
+            << "}\n";
+        ofs.flush();
+        if (!ofs.good()) return false;
+    }
+
+    std::error_code ec;
+    fs::rename(tmpPath, finalPath, ec);
+    if (ec) {
+        fs::copy_file(tmpPath, finalPath, fs::copy_options::overwrite_existing, ec);
+        fs::remove(tmpPath, ec);
+    }
+    return fs::exists(finalPath);
 }
 
 static bool LoadPersistentSnapshot(
@@ -398,6 +415,7 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                 ramTotalStr = std::to_string(totalGb) + " GB";
             }
 
+            std::string agentPubHex = AgentIdentity::GetPublicKeyHex();
             std::string response = ResponseBuilder::BuildStatusResult(
                 requestId,
                 "Windows",
@@ -411,16 +429,26 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                 "",
                 "",
                 "",
-                false
+                -1, // secureBoot null by default unless probed
+                agentPubHex
             );
 #else
+            std::string agentPubHex = AgentIdentity::GetPublicKeyHex();
             std::string response = ResponseBuilder::BuildStatusResult(
                 requestId,
                 "Linux / Container",
                 false,
                 "",
                 "",
-                persistentDeviceId
+                persistentDeviceId,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                -1,
+                agentPubHex
             );
 #endif
             g_serverInstance->SendTextMessage(clientSock, response);
@@ -468,7 +496,7 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
             }
 
             std::string persistentDeviceId = GetPersistentDeviceId();
-            TokenValidationResult tokenRes = TokenValidator::ValidateToken(toolId, executionToken, persistentDeviceId);
+            TokenValidationResult tokenRes = TokenValidator::ValidateToken(toolId, executionToken, persistentDeviceId, "APPLY");
             if (!tokenRes.valid) {
                 Logger::Instance().Warn("APPLY_OPTIMIZATION rejected by TokenValidator: " + tokenRes.error + " (Code: " + tokenRes.errorCode + ")");
                 std::string response = ResponseBuilder::BuildOptimizationAuditResult(
@@ -532,7 +560,6 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
 
                 std::string deviceId = GetPersistentDeviceId();
                 std::string beforeJson = "{\"guid\":\"" + before.guid + "\",\"name\":\"" + before.name + "\"}";
-
                 const std::string highPerfBase = "8c5e7fda-e8bf-4a96-9a14-5e7d687951d1";
 
                 // Se o plano atual já for High Performance
@@ -540,6 +567,15 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                     auto endTime = std::chrono::steady_clock::now();
                     int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
                     std::string afterJson = beforeJson;
+
+                    std::string receiptNonce = AgentIdentity::GenerateRandomNonce(16);
+                    auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::string canonicalReceipt = AgentIdentity::BuildCanonicalReceiptJson(
+                        tokenRes.executionId, requestId, toolId, "APPLY", tokenRes.userId, deviceId,
+                        "JA_APLICADO", true, beforeJson, afterJson, true, dur, ProtocolConstants::AGENT_VERSION, nowSec, receiptNonce
+                    );
+                    std::string receiptSig = AgentIdentity::SignReceipt(canonicalReceipt);
+
                     std::string response = ResponseBuilder::BuildOptimizationAuditResult(
                         requestId,
                         toolId,
@@ -551,15 +587,37 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         true,
                         dur,
                         "",
-                        "Plano de Alto Desempenho já está ativo no Windows."
+                        "Plano de Alto Desempenho já está ativo no Windows.",
+                        "",
+                        canonicalReceipt,
+                        receiptSig
                     );
                     g_serverInstance->SendTextMessage(clientSock, response);
                     Logger::Instance().Info("tool_perf_power_plan already applied.");
                     break;
                 }
 
-                // Salva snapshot persistente em disco antes da alteração
-                SavePersistentSnapshot(requestId, deviceId, toolId, beforeJson, "{\"guid\":\"" + highPerfBase + "\"}");
+                // Section 11 & 12: Salva snapshot atômico persistente em disco antes da alteração com verificação estrita
+                const bool backupOk = SavePersistentSnapshot(requestId, tokenRes.executionId, deviceId, toolId, beforeJson, "{\"guid\":\"" + highPerfBase + "\"}");
+                if (!backupOk) {
+                    std::string response = ResponseBuilder::BuildOptimizationAuditResult(
+                        requestId,
+                        toolId,
+                        "FALHA",
+                        false,
+                        false,
+                        beforeJson,
+                        "{}",
+                        false,
+                        0,
+                        "BACKUP_FAILED: Falha ao persistir snapshot atômico pré-otimização.",
+                        "Operação abortada por segurança: o backup inicial falhou.",
+                        "BACKUP_FAILED"
+                    );
+                    g_serverInstance->SendTextMessage(clientSock, response);
+                    Logger::Instance().Error("tool_perf_power_plan aborted: SavePersistentSnapshot failed.");
+                    break;
+                }
 
                 // Procura GUID de alto desempenho existente ou duplica
                 std::string targetGuid = FindExistingHighPerformanceSchemeGuid();
@@ -579,6 +637,15 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
 
                 std::string afterJson = "{\"guid\":\"" + after.guid + "\",\"name\":\"" + after.name + "\"}";
 
+                // Section 16 & 17: Gera e assina Execution Receipt canônico
+                std::string receiptNonce = AgentIdentity::GenerateRandomNonce(16);
+                auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                std::string canonicalReceipt = AgentIdentity::BuildCanonicalReceiptJson(
+                    tokenRes.executionId, requestId, toolId, "APPLY", tokenRes.userId, deviceId,
+                    verified ? "APLICADO" : "FALHA", verified, beforeJson, afterJson, true, dur, ProtocolConstants::AGENT_VERSION, nowSec, receiptNonce
+                );
+                std::string receiptSig = AgentIdentity::SignReceipt(canonicalReceipt);
+
                 if (verified) {
                     std::string response = ResponseBuilder::BuildOptimizationAuditResult(
                         requestId,
@@ -591,7 +658,10 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         true,
                         dur,
                         "",
-                        "Plano de Alto Desempenho aplicado e verificado com sucesso via PowerCfg."
+                        "Plano de Alto Desempenho aplicado e verificado com sucesso via PowerCfg.",
+                        "",
+                        canonicalReceipt,
+                        receiptSig
                     );
                     g_serverInstance->SendTextMessage(clientSock, response);
                     Logger::Instance().Info("tool_perf_power_plan applied and verified successfully.");
@@ -607,7 +677,10 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         false,
                         dur,
                         "Falha na verificação do plano de energia via PowerCfg.",
-                        "O Windows não confirmou a alteração do plano de energia."
+                        "O Windows não confirmou a alteração do plano de energia.",
+                        "VERIFY_FAILED",
+                        canonicalReceipt,
+                        receiptSig
                     );
                     g_serverInstance->SendTextMessage(clientSock, response);
                     Logger::Instance().Error("tool_perf_power_plan verification failed.");
@@ -638,7 +711,50 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
 
         case MessageType::ROLLBACK_OPTIMIZATION: {
             std::string toolId = json.get_field_string("tool_id", "");
+            std::string executionToken = json.get_field_string("execution_token", "");
             Logger::Instance().Info("ROLLBACK_OPTIMIZATION received for tool: " + toolId + " (Request ID: " + requestId + ")");
+
+            // Section 10: ROLLBACK_OPTIMIZATION também exige execution_token assinado com operation=ROLLBACK
+            if (executionToken.empty()) {
+                std::string response = ResponseBuilder::BuildOptimizationAuditResult(
+                    requestId,
+                    toolId,
+                    "FALHA",
+                    false,
+                    false,
+                    "{}",
+                    "{}",
+                    false,
+                    0,
+                    "Token de autorizacao de rollback obrigatorio ausente.",
+                    "Rollback negado pelo Agent: ausente execution_token assinado.",
+                    "INVALID_TOKEN"
+                );
+                g_serverInstance->SendTextMessage(clientSock, response);
+                break;
+            }
+
+            std::string persistentDeviceId = GetPersistentDeviceId();
+            TokenValidationResult tokenRes = TokenValidator::ValidateToken(toolId, executionToken, persistentDeviceId, "ROLLBACK");
+            if (!tokenRes.valid) {
+                Logger::Instance().Warn("ROLLBACK_OPTIMIZATION rejected by TokenValidator: " + tokenRes.error + " (Code: " + tokenRes.errorCode + ")");
+                std::string response = ResponseBuilder::BuildOptimizationAuditResult(
+                    requestId,
+                    toolId,
+                    "FALHA",
+                    false,
+                    false,
+                    "{}",
+                    "{}",
+                    false,
+                    0,
+                    tokenRes.error,
+                    "Rollback rejeitado por validacao criptografica do Agent.",
+                    tokenRes.errorCode
+                );
+                g_serverInstance->SendTextMessage(clientSock, response);
+                break;
+            }
 
             if (toolId == "tool_perf_power_plan") {
 #ifndef _WIN32
@@ -676,7 +792,8 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         false,
                         0,
                         "Nenhum snapshot persistido encontrado para reversao.",
-                        "Falha: Snapshot de estado anterior nao encontrado em disco."
+                        "Falha: Snapshot de estado anterior nao encontrado em disco.",
+                        "ROLLBACK_FAILED"
                     );
                     g_serverInstance->SendTextMessage(clientSock, response);
                     break;
@@ -693,6 +810,15 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                 std::string beforeCurrJson = "{\"guid\":\"" + before.guid + "\",\"name\":\"" + before.name + "\"}";
                 std::string afterJson = "{\"guid\":\"" + after.guid + "\",\"name\":\"" + after.name + "\"}";
 
+                // Section 16 & 17: Gera e assina Execution Receipt canônico para Rollback
+                std::string receiptNonce = AgentIdentity::GenerateRandomNonce(16);
+                auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                std::string canonicalReceipt = AgentIdentity::BuildCanonicalReceiptJson(
+                    tokenRes.executionId, requestId, toolId, "ROLLBACK", tokenRes.userId, deviceId,
+                    verified ? "REVERTIDO" : "FALHA", verified, beforeCurrJson, afterJson, false, dur, ProtocolConstants::AGENT_VERSION, nowSec, receiptNonce
+                );
+                std::string receiptSig = AgentIdentity::SignReceipt(canonicalReceipt);
+
                 if (verified) {
                     std::string response = ResponseBuilder::BuildOptimizationAuditResult(
                         requestId,
@@ -705,7 +831,10 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         false,
                         dur,
                         "",
-                        "Plano de energia restaurado com sucesso para o estado anterior via PowerCfg."
+                        "Plano de energia restaurado com sucesso para o estado anterior via PowerCfg.",
+                        "",
+                        canonicalReceipt,
+                        receiptSig
                     );
                     g_serverInstance->SendTextMessage(clientSock, response);
                     Logger::Instance().Info("tool_perf_power_plan rollback verified successfully.");
@@ -721,7 +850,10 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         true,
                         dur,
                         "Falha ao restaurar plano de energia anterior.",
-                        "O Windows não confirmou a restauração do plano de energia anterior."
+                        "O Windows não confirmou a restauração do plano de energia anterior.",
+                        "ROLLBACK_FAILED",
+                        canonicalReceipt,
+                        receiptSig
                     );
                     g_serverInstance->SendTextMessage(clientSock, response);
                 }

@@ -19,7 +19,10 @@ struct TokenValidationResult {
     std::string toolId;
     std::string userId;
     std::string deviceId;
+    std::string executionId;
+    std::string operation;
     std::string nonce;
+    int64_t iat = 0;
     int64_t exp = 0;
     std::string errorCode;
     std::string error;
@@ -28,13 +31,13 @@ struct TokenValidationResult {
 class TokenValidator {
 public:
     // Official public key for DYARTE OPTIMIZER backend execution authority (32-byte Ed25519 raw pubkey)
-    // Corresponds to public key hex: 6412366338ce65c1d1f9792847def61e9b052d357ea26d5252d34c9c16aaf00d
+    // Hex: 9fc58ae7dd4361cad6a68dabefa3e061fbe684a76c0e91d53ad85a120e2d6666
     static const uint8_t* GetServerPublicKey() {
         static const uint8_t kServerPubKey[32] = {
-            0x64, 0x12, 0x36, 0x63, 0x38, 0xce, 0x65, 0xc1,
-            0xd1, 0xf9, 0x79, 0x28, 0x47, 0xde, 0xf6, 0x1e,
-            0x9b, 0x05, 0x2d, 0x35, 0x7e, 0xa2, 0x6d, 0x52,
-            0x52, 0xd3, 0x4c, 0x9c, 0x16, 0xaa, 0xf0, 0x0d
+            0x9f, 0xc5, 0x8a, 0xe7, 0xdd, 0x43, 0x61, 0xca,
+            0xd6, 0xa6, 0x8d, 0xab, 0xef, 0xa3, 0xe0, 0x61,
+            0xfb, 0xe6, 0x84, 0xa7, 0x6c, 0x0e, 0x91, 0xd5,
+            0x3a, 0xd8, 0x5a, 0x12, 0x0e, 0x2d, 0x66, 0x66
         };
         return kServerPubKey;
     }
@@ -80,11 +83,25 @@ public:
     }
 
     /**
-     * Checks if a nonce was already consumed (replay protection).
-     * If not consumed, stores the nonce until expiration.
+     * Purges only expired nonces (exp < nowSec).
+     * Section 5: NUNCA usar consumedNonces.clear().
      */
-    static bool CheckAndConsumeNonce(const std::string& nonce, int64_t exp) {
-        if (nonce.empty()) return false;
+    static void PurgeExpiredNonces(std::unordered_map<std::string, int64_t>& store, int64_t nowSec) {
+        for (auto it = store.begin(); it != store.end(); ) {
+            if (it->second < nowSec) {
+                it = store.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    /**
+     * Checks if a nonce was already consumed (replay protection).
+     * Returns empty string if success, or errorCode string on failure.
+     */
+    static std::string CheckAndConsumeNonce(const std::string& nonce, int64_t exp, int64_t nowSec) {
+        if (nonce.empty()) return "NONCE_EMPTY";
 
         static std::unordered_map<std::string, int64_t> s_consumedNonces;
         static std::mutex s_nonceMutex;
@@ -92,43 +109,34 @@ public:
 
         std::lock_guard<std::mutex> lock(s_nonceMutex);
 
-        auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        ).count();
+        // 1. Remove only expired nonces
+        PurgeExpiredNonces(s_consumedNonces, nowSec);
 
-        // Periodic cleanup of expired nonces
-        if (s_consumedNonces.size() > 500) {
-            for (auto it = s_consumedNonces.begin(); it != s_consumedNonces.end(); ) {
-                if (it->second < nowSec - 60) {
-                    it = s_consumedNonces.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-
-        // Hard cap on memory size
-        if (s_consumedNonces.size() >= kMaxNonces) {
-            s_consumedNonces.clear();
-        }
-
-        // Replay check
+        // 2. Replay check
         if (s_consumedNonces.find(nonce) != s_consumedNonces.end()) {
-            return false; // Replay detected!
+            return "TOKEN_REPLAY";
         }
 
+        // 3. Store full check
+        if (s_consumedNonces.size() >= kMaxNonces) {
+            return "NONCE_STORE_FULL";
+        }
+
+        // 4. Record new nonce
         s_consumedNonces[nonce] = exp;
-        return true;
+        return "";
     }
 
     /**
-     * Validates an optimization execution token against the expected toolId and device.
+     * Validates an optimization execution token against expected parameters.
      * Format: <base64url(payload)>.<base64url(signature)>
      */
     static TokenValidationResult ValidateToken(
         const std::string& expectedToolId,
         const std::string& tokenStr,
-        const std::string& localDeviceId = ""
+        const std::string& localDeviceId = "",
+        const std::string& expectedOperation = "APPLY",
+        const std::string& expectedUserId = ""
     ) {
         TokenValidationResult res;
 
@@ -186,24 +194,44 @@ public:
         res.toolId = payloadJson.get_field_string("tool_id", "");
         res.userId = payloadJson.get_field_string("user_id", "");
         res.deviceId = payloadJson.get_field_string("device_id", "");
+        res.executionId = payloadJson.get_field_string("execution_id", "");
+        res.operation = payloadJson.get_field_string("operation", "APPLY");
         res.nonce = payloadJson.get_field_string("nonce", "");
+        res.iat = payloadJson.get_field_int64("iat", 0);
         res.exp = payloadJson.get_field_int64("exp", 0);
 
-        // 3. Validate tool_id matching
-        if (res.toolId != expectedToolId) {
+        // 3. Validate operation
+        if (res.operation != "APPLY" && res.operation != "ROLLBACK") {
+            res.errorCode = "TOKEN_OPERATION_MISMATCH";
+            res.error = "Operacao desconhecida no token: " + res.operation;
+            return res;
+        }
+        if (!expectedOperation.empty() && res.operation != expectedOperation) {
+            res.errorCode = "TOKEN_OPERATION_MISMATCH";
+            res.error = "Operacao do token ('" + res.operation + "') diverge da solicitada ('" + expectedOperation + "').";
+            return res;
+        }
+
+        // 4. Validate tool_id matching
+        if (!expectedToolId.empty() && res.toolId != expectedToolId) {
             res.errorCode = "TOKEN_TOOL_MISMATCH";
             res.error = "Token emitido para ferramenta '" + res.toolId + "' nao corresponde a ferramenta solicitada '" + expectedToolId + "'.";
             return res;
         }
 
-        // 4. Validate user_id present
+        // 5. Validate user_id
         if (res.userId.empty()) {
             res.errorCode = "TOKEN_USER_MISMATCH";
             res.error = "Token de autorizacao sem identificador de usuario valido.";
             return res;
         }
+        if (!expectedUserId.empty() && res.userId != expectedUserId) {
+            res.errorCode = "TOKEN_USER_MISMATCH";
+            res.error = "Usuario do token ('" + res.userId + "') diverge do esperado ('" + expectedUserId + "').";
+            return res;
+        }
 
-        // 5. Validate device_id matching if both are present
+        // 6. Validate device_id matching if localDeviceId is present
         if (!localDeviceId.empty() && !res.deviceId.empty() && res.deviceId != "N/D" && localDeviceId != "N/D") {
             if (res.deviceId != localDeviceId) {
                 res.errorCode = "DEVICE_MISMATCH";
@@ -212,21 +240,56 @@ public:
             }
         }
 
-        // 6. Validate expiration with 15-second clock skew grace period
+        // 7. Validate timestamps and TTL
         auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()
         ).count();
 
+        // iat in future beyond 15s clock skew
+        if (res.iat > (nowSec + 15)) {
+            res.errorCode = "INVALID_TOKEN";
+            res.error = "Token emitido com data futura alem da tolerancia.";
+            return res;
+        }
+
+        // exp <= iat
+        if (res.exp <= res.iat) {
+            res.errorCode = "INVALID_TOKEN";
+            res.error = "Tempo de expiracao invalido no token (exp <= iat).";
+            return res;
+        }
+
+        // TTL > 60s
+        if ((res.exp - res.iat) > 60) {
+            res.errorCode = "INVALID_TOKEN";
+            res.error = "TTL do token superior ao limite maximo de 60 segundos.";
+            return res;
+        }
+
+        // Expired check with 15-second clock skew grace period
         if (res.exp < (nowSec - 15)) {
             res.errorCode = "TOKEN_EXPIRED";
             res.error = "Token de autorizacao expirado no servidor.";
             return res;
         }
 
-        // 7. Validate nonce and check for replay
-        if (res.nonce.empty() || !CheckAndConsumeNonce(res.nonce, res.exp)) {
-            res.errorCode = "TOKEN_REPLAY";
-            res.error = "Token de autorizacao ja consumido anteriormente (replay detectado).";
+        // 8. Nonce validation and Replay Protection
+        if (res.nonce.empty()) {
+            res.errorCode = "NONCE_EMPTY";
+            res.error = "Nonce ausente ou vazio no token.";
+            return res;
+        }
+
+        std::string nonceErr = CheckAndConsumeNonce(res.nonce, res.exp, nowSec);
+        if (!nonceErr.empty()) {
+            res.errorCode = nonceErr;
+            if (nonceErr == "TOKEN_REPLAY") {
+                res.error = "Token de autorizacao ja consumido anteriormente (replay detectado).";
+            } else if (nonceErr == "NONCE_STORE_FULL") {
+                res.error = "Capacidade do registro de nonces atingida (rejeitado por seguranca).";
+            } else {
+                res.error = "Erro na validacao do nonce do token.";
+            }
             return res;
         }
 
