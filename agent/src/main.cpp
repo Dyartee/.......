@@ -4,6 +4,9 @@
 #include <csignal>
 #include <chrono>
 #include <thread>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include "logger.h"
 #include "protocol.h"
@@ -15,6 +18,7 @@
 #include <windows.h>
 #endif
 
+namespace fs = std::filesystem;
 using namespace Dyarte::Agent;
 
 static std::atomic<bool> g_keepRunning{true};
@@ -26,8 +30,149 @@ struct PowerSchemeInfo {
     bool valid = false;
 };
 
-static std::string g_previousPowerSchemeGuid = "";
-static std::string g_previousPowerSchemeName = "";
+static bool IsValidGuid(const std::string& guid) {
+    if (guid.length() != 36) return false;
+    for (size_t i = 0; i < 36; ++i) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (guid[i] != '-') return false;
+        } else {
+            if (!std::isxdigit(static_cast<unsigned char>(guid[i]))) return false;
+        }
+    }
+    return true;
+}
+
+static std::string GetAgentDataDirectory() {
+#ifdef _WIN32
+    char localAppData[MAX_PATH];
+    if (GetEnvironmentVariableA("LOCALAPPDATA", localAppData, MAX_PATH) > 0) {
+        fs::path p = fs::path(localAppData) / "DYARTE" / "Agent";
+        std::error_code ec;
+        fs::create_directories(p, ec);
+        return p.string();
+    }
+#endif
+    fs::path p = fs::current_path() / "agent_data";
+    std::error_code ec;
+    fs::create_directories(p, ec);
+    return p.string();
+}
+
+static std::string GetPersistentDeviceId() {
+    static std::string s_cachedDeviceId = "";
+    if (!s_cachedDeviceId.empty()) {
+        return s_cachedDeviceId;
+    }
+
+    std::string dataDir = GetAgentDataDirectory();
+    fs::path idFile = fs::path(dataDir) / "device_id.txt";
+
+    // 1. Try reading from persistent file
+    if (fs::exists(idFile)) {
+        std::ifstream ifs(idFile);
+        std::string line;
+        if (std::getline(ifs, line)) {
+            line.erase(0, line.find_first_not_of(" \t\r\n"));
+            line.erase(line.find_last_not_of(" \t\r\n") + 1);
+            if (!line.empty() && line.find(" ") == std::string::npos) {
+                s_cachedDeviceId = line;
+                return s_cachedDeviceId;
+            }
+        }
+    }
+
+    // 2. On Windows, read official MachineGuid from Registry
+#ifdef _WIN32
+    HKEY hKey;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
+        char guidBuf[128];
+        DWORD bufSize = sizeof(guidBuf);
+        if (RegQueryValueExA(hKey, "MachineGuid", NULL, NULL, (LPBYTE)guidBuf, &bufSize) == ERROR_SUCCESS) {
+            std::string regGuid(guidBuf);
+            RegCloseKey(hKey);
+            if (!regGuid.empty()) {
+                s_cachedDeviceId = "WIN-" + regGuid;
+                std::ofstream ofs(idFile);
+                if (ofs.is_open()) {
+                    ofs << s_cachedDeviceId << std::endl;
+                }
+                return s_cachedDeviceId;
+            }
+        }
+        RegCloseKey(hKey);
+    }
+#endif
+
+    // Fallback: Generate stable host-based ID
+    std::string fallbackId = "DEV-AGENT-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    s_cachedDeviceId = fallbackId;
+    std::ofstream ofs(idFile);
+    if (ofs.is_open()) {
+        ofs << s_cachedDeviceId << std::endl;
+    }
+    return s_cachedDeviceId;
+}
+
+static fs::path GetSnapshotPath(const std::string& deviceId, const std::string& toolId) {
+    fs::path base = fs::path(GetAgentDataDirectory()) / "backups" / deviceId / toolId;
+    std::error_code ec;
+    fs::create_directories(base, ec);
+    return base / "snapshot.json";
+}
+
+static bool SavePersistentSnapshot(
+    const std::string& optimizationId,
+    const std::string& deviceId,
+    const std::string& toolId,
+    const std::string& beforeStateJson,
+    const std::string& targetStateJson
+) {
+    fs::path path = GetSnapshotPath(deviceId, toolId);
+    std::ofstream ofs(path);
+    if (!ofs.is_open()) return false;
+
+    auto now = std::chrono::system_clock::now();
+    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    ofs << "{\n"
+        << "  \"optimization_id\": \"" << optimizationId << "\",\n"
+        << "  \"device_id\": \"" << deviceId << "\",\n"
+        << "  \"tool_id\": \"" << toolId << "\",\n"
+        << "  \"created_at\": " << nowMs << ",\n"
+        << "  \"agent_version\": \"" << ProtocolConstants::AGENT_VERSION << "\",\n"
+        << "  \"before_state\": " << (beforeStateJson.empty() ? "{}" : beforeStateJson) << ",\n"
+        << "  \"target_state\": " << (targetStateJson.empty() ? "{}" : targetStateJson) << ",\n"
+        << "  \"rollback_supported\": true\n"
+        << "}\n";
+    return true;
+}
+
+static bool LoadPersistentSnapshot(
+    const std::string& deviceId,
+    const std::string& toolId,
+    std::string& outBeforeJson,
+    std::string& outBeforeGuid
+) {
+    fs::path path = GetSnapshotPath(deviceId, toolId);
+    if (!fs::exists(path)) return false;
+
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) return false;
+
+    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    JsonValue json;
+    if (!JsonParser::Parse(content, json) || !json.is_object()) return false;
+
+    if (json.has_field("before_state")) {
+        const JsonValue& before = json.get_field("before_state");
+        if (before.is_object()) {
+            outBeforeGuid = before.get_field_string("guid", "");
+            outBeforeJson = before.to_json();
+            return !outBeforeGuid.empty();
+        }
+    }
+    return false;
+}
 
 static PowerSchemeInfo GetActivePowerScheme() {
     PowerSchemeInfo info;
@@ -54,16 +199,83 @@ static PowerSchemeInfo GetActivePowerScheme() {
     if (parenStart != std::string::npos && parenEnd != std::string::npos && parenEnd > parenStart) {
         info.name = result.substr(parenStart + 1, parenEnd - parenStart - 1);
     }
-    info.valid = !info.guid.empty();
+    info.valid = IsValidGuid(info.guid);
 #endif
     return info;
 }
 
+static std::string FindExistingHighPerformanceSchemeGuid() {
+#ifdef _WIN32
+    FILE* pipe = _popen("powercfg /list", "r");
+    if (!pipe) return "";
+    char buffer[512];
+    std::string output = "";
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+        output += buffer;
+    }
+    _pclose(pipe);
+
+    const std::string highPerfBase = "8c5e7fda-e8bf-4a96-9a14-5e7d687951d1";
+    if (output.find(highPerfBase) != std::string::npos) {
+        return highPerfBase;
+    }
+
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        std::string lower = line;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (lower.find("alto desempenho") != std::string::npos ||
+            lower.find("high performance") != std::string::npos ||
+            lower.find("ultimate performance") != std::string::npos) {
+            size_t guidPos = line.find("GUID: ");
+            if (guidPos != std::string::npos) {
+                std::string sub = line.substr(guidPos + 6);
+                size_t spacePos = sub.find_first_of(" \t\r\n");
+                if (spacePos != std::string::npos) {
+                    std::string g = sub.substr(0, spacePos);
+                    if (IsValidGuid(g)) return g;
+                }
+            }
+        }
+    }
+#endif
+    return "";
+}
+
+static std::string DuplicateHighPerformanceScheme() {
+#ifdef _WIN32
+    FILE* pipe = _popen("powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a14-5e7d687951d1", "r");
+    if (!pipe) return "";
+    char buffer[512];
+    std::string result = "";
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+        result += buffer;
+    }
+    _pclose(pipe);
+
+    size_t colonPos = result.find(":");
+    if (colonPos != std::string::npos) {
+        std::string sub = result.substr(colonPos + 1);
+        size_t firstNonSpace = sub.find_first_not_of(" \t\r\n");
+        if (firstNonSpace != std::string::npos) {
+            std::string afterTrim = sub.substr(firstNonSpace);
+            size_t spacePos = afterTrim.find_first_of(" \t\r\n");
+            if (spacePos != std::string::npos) {
+                std::string g = afterTrim.substr(0, spacePos);
+                if (IsValidGuid(g)) return g;
+            }
+        }
+    }
+#endif
+    return "";
+}
+
 static bool SetActivePowerScheme(const std::string& guid) {
 #ifdef _WIN32
-    for (char c : guid) {
-        if (!std::isalnum(c) && c != '-') return false;
-    }
+    if (!IsValidGuid(guid)) return false;
     std::string cmd = "powercfg /setactive " + guid;
     int res = system(cmd.c_str());
     return res == 0;
@@ -174,6 +386,7 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
 
         case MessageType::GET_STATUS: {
             Logger::Instance().Info("GET_STATUS command received. Request ID: " + requestId);
+            std::string persistentDeviceId = GetPersistentDeviceId();
 #ifdef _WIN32
             PowerSchemeInfo curScheme = GetActivePowerScheme();
             std::string ramTotalStr = "";
@@ -190,7 +403,7 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                 true,
                 curScheme.guid,
                 curScheme.name,
-                "", // deviceId
+                persistentDeviceId,
                 "", // cpu
                 "", // gpu
                 ramTotalStr,
@@ -205,7 +418,8 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                 "Linux / Container",
                 false,
                 "",
-                ""
+                "",
+                persistentDeviceId
             );
 #endif
             g_serverInstance->SendTextMessage(clientSock, response);
@@ -262,15 +476,15 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                     break;
                 }
 
-                g_previousPowerSchemeGuid = before.guid;
-                g_previousPowerSchemeName = before.name;
+                std::string deviceId = GetPersistentDeviceId();
+                std::string beforeJson = "{\"guid\":\"" + before.guid + "\",\"name\":\"" + before.name + "\"}";
 
-                const std::string highPerfGuid = "8c5e7fda-e8bf-4a96-9a14-5e7d687951d1";
+                const std::string highPerfBase = "8c5e7fda-e8bf-4a96-9a14-5e7d687951d1";
 
-                if (before.guid == highPerfGuid) {
+                // Se o plano atual já for High Performance
+                if (before.guid == highPerfBase || before.name.find("Alto desempenho") != std::string::npos || before.name.find("High performance") != std::string::npos) {
                     auto endTime = std::chrono::steady_clock::now();
                     int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-                    std::string beforeJson = "{\"guid\":\"" + before.guid + "\",\"name\":\"" + before.name + "\"}";
                     std::string afterJson = beforeJson;
                     std::string response = ResponseBuilder::BuildOptimizationAuditResult(
                         requestId,
@@ -290,19 +504,25 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                     break;
                 }
 
-                bool applied = SetActivePowerScheme(highPerfGuid);
-                if (!applied) {
-                    system("powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a14-5e7d687951d1");
-                    applied = SetActivePowerScheme(highPerfGuid);
+                // Salva snapshot persistente em disco antes da alteração
+                SavePersistentSnapshot(requestId, deviceId, toolId, beforeJson, "{\"guid\":\"" + highPerfBase + "\"}");
+
+                // Procura GUID de alto desempenho existente ou duplica
+                std::string targetGuid = FindExistingHighPerformanceSchemeGuid();
+                if (targetGuid.empty()) {
+                    targetGuid = DuplicateHighPerformanceScheme();
+                }
+                if (targetGuid.empty() || !IsValidGuid(targetGuid)) {
+                    targetGuid = highPerfBase;
                 }
 
+                bool applied = SetActivePowerScheme(targetGuid);
                 PowerSchemeInfo after = GetActivePowerScheme();
-                bool verified = (after.valid && after.guid == highPerfGuid);
+                bool verified = (after.valid && after.guid == targetGuid);
 
                 auto endTime = std::chrono::steady_clock::now();
                 int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
 
-                std::string beforeJson = "{\"guid\":\"" + before.guid + "\",\"name\":\"" + before.name + "\"}";
                 std::string afterJson = "{\"guid\":\"" + after.guid + "\",\"name\":\"" + after.name + "\"}";
 
                 if (verified) {
@@ -342,19 +562,19 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
 #endif
             }
 
-            // For all other tools: return honest AINDA NÃO IMPLEMENTADO status with full audit format
+            // For all other tools: return honest NOT_IMPLEMENTED status with full audit format
             std::string response = ResponseBuilder::BuildOptimizationAuditResult(
                 requestId,
                 toolId,
-                "DISPONIVEL",
+                "INCOMPATIVEL",
                 false,
                 false,
                 "{}",
                 "{}",
                 false,
                 0,
-                "AINDA NÃO IMPLEMENTADO: Esta otimização está agendada para as próximas etapas do DYARTE OPTIMIZER.",
-                "Rotina nativa em desenvolvimento no Agent."
+                "TOOL_NOT_IMPLEMENTED: Esta otimização está em desenvolvimento e não possui rotina nativa no Windows Agent.",
+                "Rotina nativa ainda não disponível no Agent."
             );
             g_serverInstance->SendTextMessage(clientSock, response);
             Logger::Instance().Warn("APPLY_OPTIMIZATION: Routine not implemented for tool " + toolId);
@@ -384,7 +604,12 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                 break;
 #else
                 auto startRollback = std::chrono::steady_clock::now();
-                if (g_previousPowerSchemeGuid.empty()) {
+                std::string deviceId = GetPersistentDeviceId();
+                std::string beforeJson = "";
+                std::string beforeGuid = "";
+                bool loaded = LoadPersistentSnapshot(deviceId, toolId, beforeJson, beforeGuid);
+
+                if (!loaded || beforeGuid.empty() || !IsValidGuid(beforeGuid)) {
                     std::string response = ResponseBuilder::BuildOptimizationAuditResult(
                         requestId,
                         toolId,
@@ -395,21 +620,22 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         "{}",
                         false,
                         0,
-                        "Nenhum GUID de plano anterior registrado no backup para reversao.",
-                        "Falha: Backup de estado anterior inexistente."
+                        "Nenhum snapshot persistido encontrado para reversao.",
+                        "Falha: Snapshot de estado anterior nao encontrado em disco."
                     );
                     g_serverInstance->SendTextMessage(clientSock, response);
                     break;
                 }
+
                 PowerSchemeInfo before = GetActivePowerScheme();
-                bool reverted = SetActivePowerScheme(g_previousPowerSchemeGuid);
+                bool reverted = SetActivePowerScheme(beforeGuid);
                 PowerSchemeInfo after = GetActivePowerScheme();
-                bool verified = (after.valid && after.guid == g_previousPowerSchemeGuid);
+                bool verified = (after.valid && after.guid == beforeGuid);
 
                 auto endRollback = std::chrono::steady_clock::now();
                 int64_t dur = std::chrono::duration_cast<std::chrono::milliseconds>(endRollback - startRollback).count();
 
-                std::string beforeJson = "{\"guid\":\"" + before.guid + "\",\"name\":\"" + before.name + "\"}";
+                std::string beforeCurrJson = "{\"guid\":\"" + before.guid + "\",\"name\":\"" + before.name + "\"}";
                 std::string afterJson = "{\"guid\":\"" + after.guid + "\",\"name\":\"" + after.name + "\"}";
 
                 if (verified) {
@@ -419,7 +645,7 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         "REVERTIDO",
                         true,
                         true,
-                        beforeJson,
+                        beforeCurrJson,
                         afterJson,
                         false,
                         dur,
@@ -435,7 +661,7 @@ void HandleIncomingClientMessage(SocketHandle clientSock, const std::string& raw
                         "FALHA",
                         false,
                         false,
-                        beforeJson,
+                        beforeCurrJson,
                         afterJson,
                         true,
                         dur,
@@ -569,13 +795,13 @@ int main(int argc, char* argv[]) {
     // Status: STARTING
     std::cout << "========================================" << std::endl;
     std::cout << "DYARTE AGENT" << std::endl;
-    std::cout << "Version: 1.0.0" << std::endl;
+    std::cout << "Version: 1.1.0" << std::endl;
     std::cout << "Status: STARTING" << std::endl;
     std::cout << "========================================" << std::endl;
 
     // Initialize local file logger
     Logger::Instance().Initialize("logs/dyarte-agent.log");
-    Logger::Instance().Info("Initializing DYARTE AGENT v1.0.0...");
+    Logger::Instance().Info("Initializing DYARTE AGENT v1.1.0...");
 
     // Register OS termination handler
 #ifdef _WIN32

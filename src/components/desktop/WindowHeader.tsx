@@ -118,7 +118,7 @@ export const WindowHeader: React.FC = () => {
         {/* Language Dropdown in Header */}
         <LanguageSwitcher className="hidden sm:flex" />
 
-        {currentUser && (currentUser.email.toLowerCase() === 'kelberduarte22@gmail.com' || currentUser.role === 'ADMIN') && (
+        {currentUser && currentUser.role === 'ADMIN' && (
           <div className="flex items-center gap-1.5 mr-2">
             <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-mono hidden sm:inline-block">
               Simulador:

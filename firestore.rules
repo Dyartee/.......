@@ -12,11 +12,15 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Item 7: Admin verification exclusively via Custom Claims or admins/{uid} with email_verified requirement
     function isAdmin() {
-      return isSignedIn() && (
-        (request.auth.token.role != null && request.auth.token.role == 'ADMIN') ||
-        (request.auth.token.email != null && request.auth.token.email.lower() == 'kelberduarte22@gmail.com')
-      );
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        (
+          request.auth.token.admin == true ||
+          request.auth.token.role == 'ADMIN' ||
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        );
     }
 
     function isOwner(userId) {
@@ -46,17 +50,15 @@ service cloud.firestore {
         ) ||
         (isAdmin() && isValidPlanLevel(request.resource.data.nivel_plano))
       );
+      // Item 6: Replace blocklist with strict hasOnly whitelist for owner updates
       allow update: if (isAdmin() && (!('nivel_plano' in request.resource.data) || isValidPlanLevel(request.resource.data.nivel_plano))) || (
         isOwner(userId) &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'role',
-          'nivel_plano',
-          'status_plano',
-          'license_id',
-          'status_licenca',
-          'status',
-          'data_expiracao',
-          'data_inicio'
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'nome',
+          'device_id',
+          'ultimo_login',
+          'avatar',
+          'updated_at'
         ])
       );
       allow delete: if isAdmin();
@@ -78,7 +80,12 @@ service cloud.firestore {
     match /devices/{deviceId} {
       allow get: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (resource.data.user_id == request.auth.uid || isAdmin());
-      allow create, update: if isSignedIn() && (request.resource.data.user_id == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && (request.resource.data.user_id == request.auth.uid || isAdmin());
+      // Item 6: Verify current document ownership (resource.data.user_id) to prevent device hijacking
+      allow update: if isSignedIn() && (
+        (resource.data.user_id == request.auth.uid && request.resource.data.user_id == request.auth.uid) ||
+        isAdmin()
+      );
       allow delete: if isAdmin();
     }
 

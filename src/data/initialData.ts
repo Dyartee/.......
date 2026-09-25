@@ -133,133 +133,14 @@ export const INITIAL_CONFIG: AppConfig = {
   safety_lock_enabled: true,
 };
 
-export const INITIAL_USERS: User[] = [
-  {
-    user_id: 'usr_duarte_001',
-    nome: 'Kelber Duarte (Admin)',
-    email: 'kelberduarte22@gmail.com',
-    data_criacao: '2026-08-15',
-    plano_atual: 'COMPLETO',
-    nivel_plano: 4,
-    status_plano: 'ATIVO',
-    data_inicio: '2026-09-01',
-    data_expiracao: '2030-12-31',
-    license_id: 'lic_duarte_7721',
-    status_licenca: 'ATIVA',
-    device_id: 'DYARTE-PC-DESKTOP-9F4A',
-    ultimo_login: 'Hoje às 14:32',
-    role: 'ADMIN',
-    status: 'ATIVO',
-  },
-  {
-    user_id: 'usr_joao_002',
-    nome: 'João Silva',
-    email: 'joao.silva@email.com',
-    data_criacao: '2026-09-02',
-    plano_atual: 'BÁSICO',
-    nivel_plano: 1,
-    status_plano: 'ATIVO',
-    data_inicio: '2026-09-02',
-    data_expiracao: '2026-10-02',
-    license_id: 'lic_joao_8192',
-    status_licenca: 'ATIVA',
-    device_id: 'PC-JOAO-WIN10-B1',
-    ultimo_login: 'Ontem às 19:10',
-    role: 'USER',
-    status: 'ATIVO',
-  },
-  {
-    user_id: 'usr_mariana_003',
-    nome: 'Mariana Rocha',
-    email: 'mariana.gamer@email.com',
-    data_criacao: '2026-08-28',
-    plano_atual: 'MÉDIO',
-    nivel_plano: 2,
-    status_plano: 'ATIVO',
-    data_inicio: '2026-08-28',
-    data_expiracao: '2026-09-28',
-    license_id: 'lic_mari_4319',
-    status_licenca: 'ATIVA',
-    device_id: 'NOTE-MARI-DELL-G15',
-    ultimo_login: '11/09/2026 às 22:40',
-    role: 'USER',
-    status: 'ATIVO',
-  },
-];
+import { isDevFixturesEnabled, DEV_USERS, DEV_LICENSES, DEV_ADMIN_LOGS } from './devFixtures';
 
-export const INITIAL_LICENSES: License[] = [
-  {
-    license_id: 'lic_duarte_7721',
-    license_key: 'DYARTE-8821-9944-X72A',
-    user_id: 'usr_duarte_001',
-    user_name: 'Duarte',
-    user_email: 'kelberduarte22@gmail.com',
-    plan_id: 'avancado',
-    status: 'ATIVA',
-    created_at: '2026-09-01',
-    activated_at: '2026-09-01 14:02:10',
-    expires_at: '2026-10-01',
-    device_id: 'DYARTE-PC-DESKTOP-9F4A',
-  },
-  {
-    license_id: 'lic_joao_8192',
-    license_key: 'DYARTE-4190-2211-M91B',
-    user_id: 'usr_joao_002',
-    user_name: 'João Silva',
-    user_email: 'joao.silva@email.com',
-    plan_id: 'basico',
-    status: 'ATIVA',
-    created_at: '2026-09-02',
-    activated_at: '2026-09-02 11:15:30',
-    expires_at: '2026-10-02',
-    device_id: 'PC-JOAO-WIN10-B1',
-  },
-  {
-    license_id: 'lic_mari_4319',
-    license_key: 'DYARTE-6652-3389-K55C',
-    user_id: 'usr_mariana_003',
-    user_name: 'Mariana Rocha',
-    user_email: 'mariana.gamer@email.com',
-    plan_id: 'medio',
-    status: 'ATIVA',
-    created_at: '2026-08-28',
-    activated_at: '2026-08-28 17:45:00',
-    expires_at: '2026-09-28',
-    device_id: 'NOTE-MARI-DELL-G15',
-  },
-];
+export const INITIAL_USERS: User[] = isDevFixturesEnabled() ? DEV_USERS : [];
+
+export const INITIAL_LICENSES: License[] = isDevFixturesEnabled() ? DEV_LICENSES : [];
 
 // Histórico real começa vazio em uma instalação limpa
 export const INITIAL_HISTORY: OptimizationHistoryItem[] = [];
 
-export const INITIAL_ADMIN_LOGS: AdminLog[] = [
-  {
-    log_id: 'log_001',
-    admin_id: 'usr_admin_000',
-    admin_name: 'Administrador DYARTE',
-    action: 'Criação de Licença',
-    target_user: 'kelberduarte22@gmail.com',
-    details: 'Licença DYARTE-8821-9944-X72A criada e associada ao plano AVANÇADO.',
-    timestamp: '2026-09-01 14:00:15',
-    ip_address: '189.44.12.89',
-  },
-  {
-    log_id: 'log_002',
-    admin_id: 'usr_admin_000',
-    admin_name: 'Administrador DYARTE',
-    action: 'Webhook de Pagamento',
-    target_user: 'kelberduarte22@gmail.com',
-    details: 'Webhook externo de aprovação de pagamento recebido para o Plano Avançado (R$ 45,00).',
-    timestamp: '2026-09-01 14:01:50',
-    ip_address: '54.232.11.200 (Gateway Externo)',
-  },
-  {
-    log_id: 'log_003',
-    admin_id: 'usr_admin_000',
-    admin_name: 'Administrador DYARTE',
-    action: 'Atualização de Ferramenta',
-    details: 'Parâmetro de impacto atualizado para "Redução Radical de Input Lag" (Level 4).',
-    timestamp: '2026-09-10 18:22:00',
-    ip_address: '189.44.12.89',
-  },
-];
+export const INITIAL_ADMIN_LOGS: AdminLog[] = isDevFixturesEnabled() ? DEV_ADMIN_LOGS : [];
+

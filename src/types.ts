@@ -73,6 +73,19 @@ export interface License {
   device_id: string;
 }
 
+export type ToolImplementationStatus = 'IMPLEMENTED' | 'NOT_IMPLEMENTED';
+
+export interface AgentCapabilities {
+  telemetry: boolean;
+  power_plan: boolean;
+  rollback: boolean;
+  memory_optimization?: boolean;
+  startup_optimization?: boolean;
+  registry_tweaks?: boolean;
+  gpu_optimization?: boolean;
+  driver_management?: boolean;
+}
+
 export interface Tool {
   tool_id: string;
   nome: string;
@@ -85,6 +98,7 @@ export interface Tool {
   details: string;
   risk_level: ToolRiskLevel;
   is_reversible: boolean;
+  implementation_status: ToolImplementationStatus;
   powershellSnippet?: string;
 }
 
@@ -274,7 +288,7 @@ export interface DyarteElectronAPI {
     getDriversPath: () => Promise<string>;
     detectGpuVendor: () => Promise<GpuDetectionResult>;
     findDriverInstaller: (vendor: 'AMD' | 'NVIDIA') => Promise<DriverInstallerInfo>;
-    executeDriverInstaller: (vendor: 'AMD' | 'NVIDIA', options?: { allowSimulatedFallback?: boolean }) => Promise<DriverExecutionResult>;
+    executeDriverInstaller: (vendor: 'AMD' | 'NVIDIA') => Promise<DriverExecutionResult>;
     getDriverStatus: () => Promise<DriverStatusResult>;
   };
   ddu: {

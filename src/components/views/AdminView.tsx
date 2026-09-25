@@ -431,6 +431,7 @@ export const AdminView: React.FC = () => {
       details: 'Rotina injetada via painel administrativo DYARTE.',
       risk_level: 'SAFE',
       is_reversible: true,
+      implementation_status: 'NOT_IMPLEMENTED',
     };
 
     adminAddTool(tool);

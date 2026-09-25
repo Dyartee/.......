@@ -11,7 +11,7 @@ namespace Agent {
 
 struct ProtocolConstants {
     static constexpr int PROTOCOL_VERSION = 1;
-    static constexpr const char* AGENT_VERSION = "1.0.0";
+    static constexpr const char* AGENT_VERSION = "1.1.0";
     static constexpr size_t MAX_MESSAGE_SIZE = 65536; // 64 KB
     static constexpr const char* DEFAULT_LISTEN_IP = "127.0.0.1";
     static constexpr int DEFAULT_PORT = 49152;
@@ -101,8 +101,8 @@ public:
 
 class ResponseBuilder {
 public:
-    static std::string BuildHandshakeAck() {
-        return "{\"protocol_version\":1,\"type\":\"HANDSHAKE_ACK\",\"agent_version\":\"1.0.0\",\"status\":\"ONLINE\"}";
+    static std::string BuildHandshakeAck(const std::string& platform = "windows") {
+        return "{\"protocol_version\":1,\"type\":\"HANDSHAKE_ACK\",\"agent_version\":\"" + std::string(ProtocolConstants::AGENT_VERSION) + "\",\"platform\":\"" + platform + "\",\"status\":\"ONLINE\",\"capabilities\":{\"telemetry\":true,\"power_plan\":true,\"rollback\":true,\"hardware_telemetry\":true}}";
     }
 
     static std::string BuildPong(int64_t timestamp) {
@@ -114,7 +114,7 @@ public:
     static std::string BuildTestConnectionResult(const std::string& requestId) {
         std::stringstream ss;
         ss << "{\"protocol_version\":1,\"request_id\":\"" << EscapeString(requestId)
-           << "\",\"type\":\"TEST_CONNECTION_RESULT\",\"success\":true,\"agent_version\":\"1.0.0\"}";
+           << "\",\"type\":\"TEST_CONNECTION_RESULT\",\"success\":true,\"agent_version\":\"" << ProtocolConstants::AGENT_VERSION << "\"}";
         return ss.str();
     }
 
@@ -210,6 +210,8 @@ public:
         if (!motherboard.empty()) ss << ",\"motherboard\":\"" << EscapeString(motherboard) << "\"";
         if (!biosVersion.empty()) ss << ",\"bios_version\":\"" << EscapeString(biosVersion) << "\"";
         ss << ",\"secure_boot\":" << (secureBoot ? "true" : "false");
+        ss << ",\"capabilities\":{\"telemetry\":true,\"power_plan\":" << (isWindows ? "true" : "false")
+           << ",\"rollback\":" << (isWindows ? "true" : "false") << ",\"hardware_telemetry\":true}";
         ss << "}";
         return ss.str();
     }

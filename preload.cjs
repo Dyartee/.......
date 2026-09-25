@@ -27,7 +27,7 @@ contextBridge.exposeInMainWorld('dyarte', {
     getDriversPath: () => ipcRenderer.invoke('drivers:get-path'),
     detectGpuVendor: () => ipcRenderer.invoke('drivers:detect-gpu'),
     findDriverInstaller: (vendor) => ipcRenderer.invoke('drivers:find-installer', vendor),
-    executeDriverInstaller: (vendor, options) => ipcRenderer.invoke('drivers:execute', vendor, options),
+    executeDriverInstaller: (vendor) => ipcRenderer.invoke('drivers:execute', vendor),
     getDriverStatus: () => ipcRenderer.invoke('drivers:get-status'),
   },
 

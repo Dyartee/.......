@@ -173,11 +173,24 @@ function findDriverInstaller(vendor) {
  * Executa o instalador do driver com elevação UAC no Windows.
  * 
  * @param {'AMD' | 'NVIDIA'} vendor 
- * @param {{ allowSimulatedFallback?: boolean }} options 
  */
-async function executeDriverInstaller(vendor, options = {}) {
+async function executeDriverInstaller(vendor) {
   console.log(`[DriverService] ========================================`);
   console.log(`[DriverService] Solicitação de execução de driver: ${vendor}`);
+
+  // Se a plataforma não for Windows
+  if (process.platform !== 'win32') {
+    const msg = 'Execução de drivers de GPU requer ambiente Microsoft Windows nativo.';
+    console.error('[DriverService] Plataforma não suportada:', msg);
+    return {
+      success: false,
+      status: 'INSTALLATION_FAILED',
+      phase: 'failed',
+      error: 'unsupported platform',
+      detectedVendor: 'UNKNOWN',
+      message: msg,
+    };
+  }
 
   // 1. Detectar GPU do sistema
   const gpuDetection = detectGpuVendor();
@@ -187,24 +200,19 @@ async function executeDriverInstaller(vendor, options = {}) {
 
   // Se não puder identificar o fabricante
   if (detectedVendor === 'UNKNOWN') {
-    // Se estivermos em ambiente de desenvolvimento fora do Windows e a flag de teste for permitida
-    if (process.platform !== 'win32' && options.allowSimulatedFallback) {
-      console.log('[DriverService] [DEV/TEST] Ambiente não-Windows com fallback permitido para validação.');
-    } else {
-      const msg = 'A GPU deste computador não pôde ser identificada com segurança pelo subsistema do Windows. Por precaução de integridade do sistema operacional, nenhum instalador de driver foi executado.';
-      console.error('[DriverService] Falha de segurança:', msg);
-      return {
-        success: false,
-        phase: 'failed',
-        error: msg,
-        detectedVendor: 'UNKNOWN',
-        gpuDetails: gpuDetection.rawOutput,
-      };
-    }
+    const msg = 'A GPU deste computador não pôde ser identificada com segurança pelo subsistema do Windows. Por precaução de integridade do sistema operacional, nenhum instalador de driver foi executado.';
+    console.error('[DriverService] Falha de segurança:', msg);
+    return {
+      success: false,
+      phase: 'failed',
+      error: msg,
+      detectedVendor: 'UNKNOWN',
+      gpuDetails: gpuDetection.rawOutput,
+    };
   }
 
   // 2. Verificar correspondência entre o driver clicado e o hardware real
-  if (detectedVendor !== 'UNKNOWN' && detectedVendor !== vendor) {
+  if (detectedVendor !== vendor) {
     const msg = `Este driver (${vendor}) não corresponde à GPU detectada neste computador (${detectedVendor}: ${gpuDetection.rawOutput}). Operação bloqueada para evitar conflito de kernel no Windows.`;
     console.error('[DriverService] Incompatibilidade de hardware:', msg);
     return {
@@ -233,47 +241,24 @@ async function executeDriverInstaller(vendor, options = {}) {
   const targetExe = installerResult.fullPath;
   console.log(`[DriverService] Solicitando elevação UAC para executar: "${targetExe}"...`);
 
-  if (process.platform === 'win32') {
-    try {
-      // Escapa aspas no PowerShell
-      const escapedPath = targetExe.replace(/'/g, "''");
-      const workingDir = path.dirname(targetExe).replace(/'/g, "''");
+  try {
+    // Escapa aspas no PowerShell
+    const escapedPath = targetExe.replace(/'/g, "''");
+    const workingDir = path.dirname(targetExe).replace(/'/g, "''");
 
-      // PowerShell Start-Process com -Verb RunAs dispara nativamente a caixa do UAC do Windows
-      const psScript = `Start-Process -FilePath '${escapedPath}' -WorkingDirectory '${workingDir}' -Verb RunAs`;
-      const psArgs = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript];
+    // PowerShell Start-Process com -Verb RunAs dispara nativamente a caixa do UAC do Windows
+    const psScript = `Start-Process -FilePath '${escapedPath}' -WorkingDirectory '${workingDir}' -Verb RunAs`;
+    const psArgs = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript];
 
-      const child = spawn('powershell.exe', psArgs, {
-        detached: true,
-        stdio: 'ignore',
-      });
+    const child = spawn('powershell.exe', psArgs, {
+      detached: true,
+      stdio: 'ignore',
+    });
 
-      child.unref();
+    child.unref();
 
-      console.log(`[DriverService] Processo de instalação disparado com sucesso via UAC (PID: ${child.pid || 'ativo'}).`);
+    console.log(`[DriverService] Processo de instalação disparado com sucesso via UAC (PID: ${child.pid || 'ativo'}).`);
 
-      return {
-        success: true,
-        status: 'INSTALLER_LAUNCHED',
-        phase: 'executing',
-        fileName: installerResult.fileName,
-        fullPath: installerResult.fullPath,
-        sizeMb: installerResult.sizeMb,
-        detectedVendor,
-        message: `Instalador oficial do driver ${vendor} disparado com privilégios de Administrador. Conclua o assistente de instalação na tela do Windows.`,
-      };
-    } catch (execErr) {
-      console.error('[DriverService] Erro ao disparar processo com UAC no Windows:', execErr.message);
-      return {
-        success: false,
-        status: 'INSTALLATION_FAILED',
-        phase: 'failed',
-        error: `Falha ao iniciar o processo do instalador com privilégios de Administrador: ${execErr.message}`,
-      };
-    }
-  } else {
-    // Ambiente de desenvolvimento (Linux/macOS)
-    console.log(`[DriverService] [DEV/NON-WIN] Simulação de disparo concluída para: ${targetExe}`);
     return {
       success: true,
       status: 'INSTALLER_LAUNCHED',
@@ -282,7 +267,15 @@ async function executeDriverInstaller(vendor, options = {}) {
       fullPath: installerResult.fullPath,
       sizeMb: installerResult.sizeMb,
       detectedVendor,
-      message: `[Ambiente de Teste] Instalador oficial ${installerResult.fileName} localizado e validado para execução no Windows.`,
+      message: `Instalador oficial do driver ${vendor} disparado com privilégios de Administrador. Conclua o assistente de instalação na tela do Windows.`,
+    };
+  } catch (execErr) {
+    console.error('[DriverService] Erro ao disparar processo com UAC no Windows:', execErr.message);
+    return {
+      success: false,
+      status: 'INSTALLATION_FAILED',
+      phase: 'failed',
+      error: `Falha ao iniciar o processo do instalador com privilégios de Administrador: ${execErr.message}`,
     };
   }
 }
@@ -415,13 +408,13 @@ async function executeDdu() {
       };
     }
   } else {
-    console.log(`[DriverService] [DDU] [DEV/NON-WIN] Executável DDU validado em: ${targetExe}`);
     return {
-      status: 'DDU_LAUNCHED',
-      success: true,
-      message: 'DDU iniciado. Aguardando operação do usuário. (Ambiente de validação não-Windows)',
+      status: 'DDU_FAILED',
+      success: false,
+      message: 'Operação não suportada nesta plataforma (' + process.platform + '). O DDU requer ambiente Microsoft Windows nativo.',
       fullPath: targetExe,
       fileName: dduInfo.fileName,
+      error: 'unsupported platform',
     };
   }
 }

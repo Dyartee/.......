@@ -6,6 +6,7 @@ import { initializeApp, getApps, App as AdminApp } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import firebaseConfig from './firebase-applet-config.json';
+import { CANONICAL_TOOLS_MAP } from './src/data/canonicalCatalog';
 
 const app = express();
 const PORT = 3000;
@@ -59,28 +60,8 @@ function rateLimiter(req: Request, res: Response, next: NextFunction) {
 // Apply rate limiter to all API endpoints
 app.use('/api', rateLimiter);
 
-// Canonical Tools Catalog on Backend Authority (Frontend parameters are not trusted)
-const CANONICAL_TOOLS: Record<string, { name: string; category: string; required_plan_level: number }> = {
-  tool_sys_win_opt: { name: 'Otimização Básica do Windows', category: 'SISTEMA', required_plan_level: 2 },
-  tool_sys_cleanup: { name: 'Limpeza de Arquivos Temporários', category: 'SISTEMA', required_plan_level: 2 },
-  tool_sys_startup: { name: 'Ajustes Básicos de Inicialização', category: 'SISTEMA', required_plan_level: 2 },
-  tool_sys_proc_manager: { name: 'Redução de Processos Desnecessários', category: 'SISTEMA', required_plan_level: 2 },
-  tool_sys_stability: { name: 'Ajustes de Estabilidade do Kernel', category: 'SISTEMA', required_plan_level: 2 },
-  tool_sys_advanced_tweaks: { name: 'Otimizações Avançadas do Windows', category: 'SISTEMA', required_plan_level: 3 },
-  tool_perf_cpu_basic: { name: 'Desempenho Básico de CPU', category: 'DESEMPENHO', required_plan_level: 1 },
-  tool_perf_power_plan: { name: 'Plano de Energia de Alta Performance', category: 'DESEMPENHO', required_plan_level: 2 },
-  tool_perf_ram_opt: { name: 'Otimização Inteligente de Memória RAM', category: 'DESEMPENHO', required_plan_level: 2 },
-  tool_perf_latency_settings: { name: 'Configurações de Latência & Timer Resolution', category: 'DESEMPENHO', required_plan_level: 3 },
-  tool_perf_dpc_latency: { name: 'Ajustes Avançados de Latência DPC', category: 'DESEMPENHO', required_plan_level: 4 },
-  tool_perf_queue_depth: { name: 'Redução da Fila de Comandos do Kernel', category: 'DESEMPENHO', required_plan_level: 4 },
-  tool_game_fps_tweaks: { name: 'Ajustes de Frametime em Jogos', category: 'GAMING', required_plan_level: 3 },
-  tool_game_low_latency: { name: 'Modo Gamer de Baixa Latência', category: 'GAMING', required_plan_level: 3 },
-  tool_game_frame_consistency: { name: 'Consistência de Quadros Avançada', category: 'GAMING', required_plan_level: 4 },
-  tool_game_extreme_suite: { name: 'Suite Exclusiva DYARTE Extreme', category: 'GAMING', required_plan_level: 4 },
-  tool_gpu_profile_opt: { name: 'Perfis Otimizados de GPU', category: 'GPU', required_plan_level: 3 },
-  tool_gpu_amd_driver: { name: 'AMD Driver Optimized', category: 'GPU', required_plan_level: 3 },
-  tool_gpu_nvidia_driver: { name: 'NVIDIA Driver Optimized', category: 'GPU', required_plan_level: 3 },
-};
+// Canonical Tools Catalog on Backend Authority (Unified single source of truth from canonicalCatalog.ts)
+const CANONICAL_TOOLS = CANONICAL_TOOLS_MAP;
 
 // Extended Request interface with authenticated user
 export interface AuthenticatedRequest extends Request {
@@ -149,7 +130,7 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
         data_expiracao: isKelber ? '2030-12-31' : '-',
         license_id: isKelber ? `lic_${decoded.uid.substring(0, 8)}` : '',
         status_licenca: isKelber ? 'ATIVA' : 'INATIVA',
-        device_id: 'DYARTE-DESKTOP',
+        device_id: 'N/D',
         ultimo_login: new Date().toISOString(),
         status: 'ATIVO',
       };
@@ -293,12 +274,11 @@ app.post('/api/license/validate', requireAuth, async (req: AuthenticatedRequest,
   }
 });
 
-// Execute Optimization Tool - Protected with Server-Side Canonical Registry & License Validation
+// Authorize Optimization Tool - Protected with Server-Side Canonical Registry & License Validation
 app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { tool_id } = req.body;
     const user = req.userDoc;
-    const uid = req.user!.uid;
 
     if (!tool_id || typeof tool_id !== 'string') {
       return res.status(400).json({ success: false, error: 'tool_id é obrigatório.' });
@@ -333,33 +313,74 @@ app.post('/api/tools/execute', requireAuth, async (req: AuthenticatedRequest, re
       });
     }
 
-    // Record optimization authorization in database
-    const historyId = `opt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const authItem = {
-      history_id: historyId,
-      user_id: uid,
-      tool_id,
-      tool_name: canonicalTool.name,
-      category: canonicalTool.category,
-      date: new Date().toISOString(),
-      status: 'AUTORIZADO',
-      result: 'Diretiva de otimização autorizada pelo servidor central. Requer execução local pelo DYARTE Agent.',
-      duration_ms: 0,
-      details: `Execução autorizada pelo backend central (Plano Nível ${reqLevel}).`,
-    };
-
-    await adminDb.collection('optimization_history').doc(historyId).set(authItem);
-
     res.json({
       success: true,
       authorized: true,
       tool_id,
-      authItem,
-      message: 'Otimização autorizada pelo servidor. Dispare a execução local através do DYARTE Agent.',
+      required_plan_level: reqLevel,
+      message: 'Otimização autorizada pelo servidor central. Dispare a execução local através do DYARTE Agent.',
     });
   } catch (error) {
-    console.error('Erro na execução de ferramenta:', error);
+    console.error('Erro na autorização da ferramenta:', error);
     res.status(500).json({ error: 'Erro ao processar autorização da otimização no servidor.' });
+  }
+});
+
+// Record Verified Optimization Execution Result in History
+app.post('/api/tools/record-result', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const {
+      optimization_id,
+      device_id,
+      tool_id,
+      status,
+      result,
+      duration_ms,
+      agent_version,
+      before_state,
+      after_state,
+      verified,
+      rollback_available,
+      error,
+    } = req.body;
+
+    const uid = req.user!.uid;
+
+    if (!tool_id || !status) {
+      return res.status(400).json({ error: 'tool_id e status são obrigatórios.' });
+    }
+
+    const canonicalTool = CANONICAL_TOOLS[tool_id];
+    const toolName = canonicalTool?.nome || tool_id;
+    const category = canonicalTool?.categoria || 'SISTEMA';
+
+    const historyId = optimization_id || `hist_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+
+    const record = {
+      history_id: historyId,
+      user_id: uid,
+      device_id: device_id || req.userDoc?.device_id || 'N/D',
+      tool_id,
+      tool_name: toolName,
+      category,
+      date: new Date().toISOString(),
+      status: status === 'SUCESSO' || status === 'REVERTIDO' ? status : 'FALHA',
+      result: result || (status === 'SUCESSO' ? 'Otimização aplicada e confirmada.' : 'Operação falhou.'),
+      duration_ms: typeof duration_ms === 'number' ? Math.max(0, duration_ms) : 0,
+      agent_version: agent_version || '1.1.0',
+      before_state: before_state || null,
+      after_state: after_state || null,
+      verified: Boolean(verified),
+      rollback_available: Boolean(rollback_available),
+      error: error || null,
+    };
+
+    await adminDb.collection('optimization_history').doc(historyId).set(record);
+
+    res.json({ success: true, record });
+  } catch (err) {
+    console.error('Erro ao gravar histórico oficial:', err);
+    res.status(500).json({ error: 'Falha ao registrar histórico de execução.' });
   }
 });
 
@@ -368,9 +389,15 @@ app.post('/api/device/sync', requireAuth, async (req: AuthenticatedRequest, res:
   try {
     const rawData = req.body || {};
     const uid = req.user!.uid;
-    const deviceId = typeof rawData.device_id === 'string' && rawData.device_id.trim()
-      ? rawData.device_id.trim().substring(0, 64)
-      : `DEV_${uid.substring(0, 8)}`;
+    const rawDeviceId = typeof rawData.device_id === 'string' ? rawData.device_id.trim() : '';
+
+    if (!rawDeviceId || rawDeviceId === 'N/D' || rawDeviceId.startsWith('DEV_') || rawDeviceId.startsWith('DESKTOP-AUTO')) {
+      return res.status(400).json({
+        error: 'device_id inválido. O identificador do dispositivo deve ser obtido exclusivamente através do Windows Agent ativo.',
+      });
+    }
+
+    const deviceId = rawDeviceId.substring(0, 64);
 
     const sanitizedDevice = {
       device_id: deviceId,

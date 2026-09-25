@@ -348,8 +348,8 @@ function setupIpcHandlers() {
     return driverService.findDriverInstaller(vendor);
   });
 
-  ipcMain.handle('drivers:execute', async (_event, vendor, options) => {
-    return await driverService.executeDriverInstaller(vendor, options);
+  ipcMain.handle('drivers:execute', async (_event, vendor) => {
+    return await driverService.executeDriverInstaller(vendor);
   });
 
   ipcMain.handle('drivers:get-status', () => {

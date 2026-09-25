@@ -1,61 +1,55 @@
 #include "websocket_server.h"
 #include "logger.h"
 #include "sha1_base64.h"
+
 #include <iostream>
 #include <sstream>
-#include <cstring>
-#include <algorithm>
 #include <unordered_map>
-#include <cerrno>
+#include <algorithm>
+#include <cstring>
 
 namespace Dyarte {
 namespace Agent {
 
-static const char* WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+namespace {
+    const std::string WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-static std::string Trim(const std::string& str) {
-    size_t start = 0;
-    while (start < str.size() && (str[start] == ' ' || str[start] == '\t' || str[start] == '\r' || str[start] == '\n')) {
-        start++;
+    std::string ToLower(std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return s;
     }
-    size_t end = str.size();
-    while (end > start && (str[end - 1] == ' ' || str[end - 1] == '\t' || str[end - 1] == '\r' || str[end - 1] == '\n')) {
-        end--;
-    }
-    return str.substr(start, end - start);
-}
 
-static std::string ToLower(const std::string& str) {
-    std::string res = str;
-    std::transform(res.begin(), res.end(), res.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return res;
-}
-
-static bool SendExact(SocketHandle sock, const char* data, size_t len) {
-    size_t total = 0;
-    while (total < len) {
-        int s = send(sock, data + total, static_cast<int>(len - total), 0);
-        if (s <= 0) return false;
-        total += s;
+    std::string Trim(const std::string& s) {
+        auto wsfront = std::find_if_not(s.begin(), s.end(), [](int c) { return std::isspace(c); });
+        auto wsback = std::find_if_not(s.rbegin(), s.rend(), [](int c) { return std::isspace(c); }).base();
+        return (wsback <= wsfront ? std::string() : std::string(wsfront, wsback));
     }
-    return true;
-}
 
-static bool RecvExact(SocketHandle sock, char* buf, size_t len) {
-    size_t total = 0;
-    while (total < len) {
-        int r = recv(sock, buf + total, static_cast<int>(len - total), 0);
-        if (r <= 0) return false;
-        total += r;
+    bool SendExact(SocketHandle sock, const char* buffer, size_t length) {
+        size_t totalSent = 0;
+        while (totalSent < length) {
+            int sent = send(sock, buffer + totalSent, static_cast<int>(length - totalSent), 0);
+            if (sent <= 0) return false;
+            totalSent += sent;
+        }
+        return true;
     }
-    return true;
+
+    bool RecvExact(SocketHandle sock, char* buffer, size_t length) {
+        size_t totalReceived = 0;
+        while (totalReceived < length) {
+            int recvd = recv(sock, buffer + totalReceived, static_cast<int>(length - totalReceived), 0);
+            if (recvd <= 0) return false;
+            totalReceived += recvd;
+        }
+        return true;
+    }
 }
 
 WebSocketServer::WebSocketServer(const std::string& bindIp, int port)
-    : bindIp_(bindIp), port_(port) {
-}
+    : bindIp_(bindIp), port_(port) {}
 
 WebSocketServer::~WebSocketServer() {
     Stop();
@@ -83,9 +77,10 @@ bool WebSocketServer::Start(MessageCallback onMessage) {
 
     int opt = 1;
 #ifdef _WIN32
-    setsockopt(listenSocket_, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+    // Item 12: SO_EXCLUSIVEADDRUSE prevents local port hijacking on Windows
+    setsockopt(listenSocket_, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&opt, sizeof(opt));
 #else
-    setsockopt(listenSocket_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(listenSocket_, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
 #endif
 
     sockaddr_in serverAddr{};
@@ -133,6 +128,7 @@ void WebSocketServer::Stop() {
         listenSocket_ = INVALID_SOCK_HANDLE;
     }
 
+    // Item 15: Concurrency safety on client disconnection
     {
         std::lock_guard<std::mutex> lock(clientsMutex_);
         for (SocketHandle sock : connectedClients_) {
@@ -148,8 +144,7 @@ void WebSocketServer::Stop() {
 #ifdef _WIN32
     WSACleanup();
 #endif
-
-    Logger::Instance().Info("WebSocket server stopped cleanly.");
+    Logger::Instance().Info("WebSocket server stopped successfully.");
 }
 
 size_t WebSocketServer::GetConnectedClientsCount() {
@@ -159,48 +154,41 @@ size_t WebSocketServer::GetConnectedClientsCount() {
 
 void WebSocketServer::RunServerLoop() {
     while (isRunning_.load()) {
-        fd_set readFds;
-        FD_ZERO(&readFds);
-        FD_SET(listenSocket_, &readFds);
+        sockaddr_in clientAddr{};
+        socklen_t clientLen = sizeof(clientAddr);
 
-        timeval timeout{};
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 200000; // 200ms timeout for non-blocking interruptibility
-
-        int activity = select(static_cast<int>(listenSocket_ + 1), &readFds, nullptr, nullptr, &timeout);
-        if (activity < 0) {
+        SocketHandle clientSock = accept(listenSocket_, (struct sockaddr*)&clientAddr, &clientLen);
+        if (clientSock == INVALID_SOCK_HANDLE) {
             if (!isRunning_.load()) break;
             continue;
         }
 
-        if (activity > 0 && FD_ISSET(listenSocket_, &readFds)) {
-            sockaddr_in clientAddr{};
+        // Item 11: Configure SO_RCVTIMEO (30 seconds) to prevent hanging threads
 #ifdef _WIN32
-            int clientLen = sizeof(clientAddr);
+        DWORD timeoutMs = 30000;
+        setsockopt(clientSock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeoutMs, sizeof(timeoutMs));
 #else
-            socklen_t clientLen = sizeof(clientAddr);
+        struct timeval tv;
+        tv.tv_sec = 30;
+        tv.tv_usec = 0;
+        setsockopt(clientSock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
 #endif
-            SocketHandle clientSock = accept(listenSocket_, (struct sockaddr*)&clientAddr, &clientLen);
-            if (clientSock == INVALID_SOCK_HANDLE) {
-                continue;
-            }
 
-            char clientIpStr[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &(clientAddr.sin_addr), clientIpStr, INET_ADDRSTRLEN);
+        char clientIpStr[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIpStr, sizeof(clientIpStr));
 
-            // Double security verification: Reject connection if not loopback
-            if (std::string(clientIpStr) != "127.0.0.1") {
-                Logger::Instance().Warn("Rejected non-loopback connection attempt from: " + std::string(clientIpStr));
-                closesocket(clientSock);
-                continue;
-            }
-
-            Logger::Instance().Info("Client connected from: " + std::string(clientIpStr));
-
-            std::thread([this, clientSock]() {
-                this->HandleClient(clientSock);
-            }).detach();
+        // Strict loopback check
+        if (std::string(clientIpStr) != "127.0.0.1") {
+            Logger::Instance().Warn("Rejected non-loopback connection attempt from: " + std::string(clientIpStr));
+            closesocket(clientSock);
+            continue;
         }
+
+        Logger::Instance().Info("Client connected from: " + std::string(clientIpStr));
+
+        std::thread([this, clientSock]() {
+            this->HandleClient(clientSock);
+        }).detach();
     }
 }
 
@@ -244,7 +232,6 @@ bool WebSocketServer::PerformHandshake(SocketHandle clientSock) {
     char buffer[4096];
     size_t headerEnd = std::string::npos;
 
-    // Read until double CRLF (\r\n\r\n) or double LF (\n\n) per HTTP specs
     while (true) {
         size_t crlfPos = request.find("\r\n\r\n");
         if (crlfPos != std::string::npos) {
@@ -257,72 +244,40 @@ bool WebSocketServer::PerformHandshake(SocketHandle clientSock) {
             break;
         }
 
-        Logger::Instance().Info("[WS DEBUG] Waiting HTTP handshake...");
         int bytes = recv(clientSock, buffer, sizeof(buffer) - 1, 0);
-
-        if (bytes == 0) {
-            Logger::Instance().Warn("[WS DEBUG] recv returned: 0 (client closed connection normally / sent FIN before sending HTTP headers)");
-            Logger::Instance().Warn("WebSocket handshake failed: Connection closed or read error while awaiting HTTP headers.");
+        if (bytes <= 0) {
+            Logger::Instance().Warn("WebSocket handshake failed: Connection closed while awaiting HTTP headers.");
             return false;
-        } else if (bytes < 0) {
-#ifdef _WIN32
-            int err = WSAGetLastError();
-#else
-            int err = errno;
-#endif
-            Logger::Instance().Warn("[WS DEBUG] recv returned: " + std::to_string(bytes) + " (socket error, code: " + std::to_string(err) + ")");
-            Logger::Instance().Warn("WebSocket handshake failed: Connection closed or read error while awaiting HTTP headers.");
-            return false;
-        } else {
-            buffer[bytes] = '\0';
-            std::string prefix;
-            // Extract only up to first line or 60 chars (no cookies, tokens, or sensitive data)
-            for (int i = 0; i < bytes && i < 60; ++i) {
-                if (buffer[i] == '\r' || buffer[i] == '\n') break;
-                prefix += buffer[i];
-            }
-            Logger::Instance().Info("[WS DEBUG] recv returned: " + std::to_string(bytes));
-            Logger::Instance().Info("[WS DEBUG] Request prefix: " + prefix);
-            request.append(buffer, bytes);
         }
 
+        buffer[bytes] = '\0';
+        request.append(buffer, bytes);
+
         if (request.size() > 16384) {
-            Logger::Instance().Warn("WebSocket handshake rejected: HTTP headers size exceeded 16 KB.");
+            Logger::Instance().Warn("WebSocket handshake rejected: HTTP headers exceeded 16 KB.");
             std::string resp = "HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n";
             SendExact(clientSock, resp.c_str(), resp.size());
             return false;
         }
     }
 
-    // Parse HTTP lines
     std::istringstream stream(request.substr(0, headerEnd));
     std::string requestLine;
     if (!std::getline(stream, requestLine)) {
-        Logger::Instance().Warn("WebSocket handshake rejected: Empty request line.");
         return false;
     }
 
-    // Validate Request-Line: RFC 6455 requires GET method and at least HTTP/1.1
     requestLine = Trim(requestLine);
     std::istringstream reqLineStream(requestLine);
     std::string method, uri, httpVer;
     reqLineStream >> method >> uri >> httpVer;
 
     if (method != "GET") {
-        Logger::Instance().Warn("WebSocket handshake rejected: RFC 6455 requires GET method, received: " + method);
         std::string resp = "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\nConnection: close\r\n\r\n";
         SendExact(clientSock, resp.c_str(), resp.size());
         return false;
     }
 
-    if (httpVer.rfind("HTTP/1.", 0) != 0 && httpVer != "HTTP/2.0") {
-        Logger::Instance().Warn("WebSocket handshake rejected: Invalid HTTP version: " + httpVer);
-        std::string resp = "HTTP/1.1 505 HTTP Version Not Supported\r\nConnection: close\r\n\r\n";
-        SendExact(clientSock, resp.c_str(), resp.size());
-        return false;
-    }
-
-    // Parse Headers (Case-Insensitive map, robust to header ordering and spacing)
     std::unordered_map<std::string, std::string> headers;
     std::string headerLine;
     while (std::getline(stream, headerLine)) {
@@ -342,51 +297,75 @@ bool WebSocketServer::PerformHandshake(SocketHandle clientSock) {
         }
     }
 
-    // 1. Validate 'Upgrade: websocket'
+    // Item 8: Validate Origin header against authorized app origins
+    auto itOrigin = headers.find("origin");
+    if (itOrigin != headers.end() && !itOrigin->second.empty()) {
+        std::string origin = ToLower(itOrigin->second);
+        bool originAllowed = (
+            origin == "file://" ||
+            origin.rfind("file://", 0) == 0 ||
+            origin.rfind("app://", 0) == 0 ||
+            origin == "null" ||
+            origin.find("127.0.0.1") != std::string::npos ||
+            origin.find("localhost") != std::string::npos
+        );
+        if (!originAllowed) {
+            Logger::Instance().Warn("WebSocket handshake REJECTED: Origin forbidden: " + origin);
+            std::string resp = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
+            SendExact(clientSock, resp.c_str(), resp.size());
+            return false;
+        }
+    }
+
+    // Validate Host header
+    auto itHost = headers.find("host");
+    if (itHost != headers.end()) {
+        std::string host = ToLower(itHost->second);
+        if (host.find("127.0.0.1") == std::string::npos && host.find("localhost") == std::string::npos) {
+            Logger::Instance().Warn("WebSocket handshake REJECTED: Host forbidden: " + host);
+            std::string resp = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
+            SendExact(clientSock, resp.c_str(), resp.size());
+            return false;
+        }
+    }
+
+    // 1. Upgrade: websocket
     auto itUpgrade = headers.find("upgrade");
     if (itUpgrade == headers.end() || ToLower(itUpgrade->second).find("websocket") == std::string::npos) {
-        Logger::Instance().Warn("WebSocket handshake rejected: Missing or invalid Upgrade header (expected 'websocket').");
         std::string resp = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
         SendExact(clientSock, resp.c_str(), resp.size());
         return false;
     }
 
-    // 2. Validate 'Connection: Upgrade'
+    // 2. Connection: Upgrade
     auto itConn = headers.find("connection");
     if (itConn == headers.end() || ToLower(itConn->second).find("upgrade") == std::string::npos) {
-        Logger::Instance().Warn("WebSocket handshake rejected: Missing or invalid Connection header (must include 'Upgrade').");
         std::string resp = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
         SendExact(clientSock, resp.c_str(), resp.size());
         return false;
     }
 
-    // 3. Validate 'Sec-WebSocket-Version: 13'
+    // 3. Sec-WebSocket-Version: 13
     auto itVer = headers.find("sec-websocket-version");
     if (itVer == headers.end() || itVer->second != "13") {
-        std::string ver = (itVer != headers.end()) ? itVer->second : "none";
-        Logger::Instance().Warn("WebSocket handshake rejected: Unsupported Sec-WebSocket-Version (" + ver + "), expected 13.");
         std::string resp = "HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nConnection: close\r\n\r\n";
         SendExact(clientSock, resp.c_str(), resp.size());
         return false;
     }
 
-    // 4. Validate 'Sec-WebSocket-Key'
+    // 4. Sec-WebSocket-Key
     auto itKey = headers.find("sec-websocket-key");
     if (itKey == headers.end() || itKey->second.empty()) {
-        Logger::Instance().Warn("WebSocket handshake rejected: Missing or empty Sec-WebSocket-Key.");
         std::string resp = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
         SendExact(clientSock, resp.c_str(), resp.size());
         return false;
     }
 
     std::string secKey = itKey->second;
-
-    // 5. Compute Sec-WebSocket-Accept = Base64(SHA1(secKey + WS_GUID))
     std::string combined = secKey + WS_GUID;
     std::vector<uint8_t> shaHash = Sha1::Compute(combined);
     std::string acceptKey = Base64::Encode(shaHash.data(), shaHash.size());
 
-    // 6. Build HTTP 101 Response per RFC 6455
     std::string response =
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
@@ -394,7 +373,6 @@ bool WebSocketServer::PerformHandshake(SocketHandle clientSock) {
         "Sec-WebSocket-Accept: " + acceptKey + "\r\n\r\n";
 
     if (!SendExact(clientSock, response.c_str(), response.size())) {
-        Logger::Instance().Error("WebSocket handshake failed: Could not send HTTP 101 Switching Protocols response.");
         return false;
     }
 
@@ -402,95 +380,102 @@ bool WebSocketServer::PerformHandshake(SocketHandle clientSock) {
     return true;
 }
 
+// Item 10: ReadFrame consumes mask and payload for PING (0x9) and PONG (0xA)
 bool WebSocketServer::ReadFrame(SocketHandle clientSock, std::string& outPayload, bool& outIsClose) {
     outPayload.clear();
     outIsClose = false;
 
-    // Read first 2 bytes safely
-    uint8_t header[2];
-    if (!RecvExact(clientSock, reinterpret_cast<char*>(header), 2)) {
-        return false;
-    }
-
-    uint8_t opcode = header[0] & 0x0F;
-    bool isMasked = (header[1] & 0x80) != 0;
-    uint64_t payloadLen = header[1] & 0x7F;
-
-    // Handle Connection Close Opcode (0x8)
-    if (opcode == 0x8) {
-        outIsClose = true;
-        return true;
-    }
-
-    // Handle Ping Opcode (0x9) -> respond with Pong (0xA)
-    if (opcode == 0x9) {
-        uint8_t pongHeader[2] = { 0x8A, 0x00 };
-        SendExact(clientSock, reinterpret_cast<const char*>(pongHeader), 2);
-        return true;
-    }
-
-    // Handle Pong Opcode (0xA) -> keepalive acknowledged
-    if (opcode == 0xA) {
-        return true;
-    }
-
-    // Read Extended Length
-    if (payloadLen == 126) {
-        uint8_t extLen[2];
-        if (!RecvExact(clientSock, reinterpret_cast<char*>(extLen), 2)) return false;
-        payloadLen = (static_cast<uint64_t>(extLen[0]) << 8) | extLen[1];
-    } else if (payloadLen == 127) {
-        uint8_t extLen[8];
-        if (!RecvExact(clientSock, reinterpret_cast<char*>(extLen), 8)) return false;
-        payloadLen = 0;
-        for (int i = 0; i < 8; i++) {
-            payloadLen = (payloadLen << 8) | extLen[i];
-        }
-    }
-
-    // Max message limit check (64 KB)
-    if (payloadLen > 65536) {
-        Logger::Instance().Error("WebSocket frame payload exceeds max size limit (64 KB).");
-        return false;
-    }
-
-    // Mask key (RFC 6455 requires client-to-server frames to be masked)
-    uint8_t maskKey[4] = { 0, 0, 0, 0 };
-    if (isMasked) {
-        if (!RecvExact(clientSock, reinterpret_cast<char*>(maskKey), 4)) return false;
-    }
-
-    // Read payload
-    std::vector<char> buffer(static_cast<size_t>(payloadLen));
-    if (payloadLen > 0) {
-        if (!RecvExact(clientSock, buffer.data(), static_cast<size_t>(payloadLen))) {
+    while (isRunning_.load()) {
+        uint8_t header[2];
+        if (!RecvExact(clientSock, reinterpret_cast<char*>(header), 2)) {
             return false;
         }
-    }
 
-    // Unmask
-    if (isMasked) {
-        for (size_t i = 0; i < payloadLen; i++) {
-            buffer[i] ^= maskKey[i % 4];
+        uint8_t opcode = header[0] & 0x0F;
+        bool isMasked = (header[1] & 0x80) != 0;
+        uint64_t payloadLen = header[1] & 0x7F;
+
+        if (opcode == 0x8) {
+            outIsClose = true;
+            return true;
         }
+
+        // Extended Length
+        if (payloadLen == 126) {
+            uint8_t extLen[2];
+            if (!RecvExact(clientSock, reinterpret_cast<char*>(extLen), 2)) return false;
+            payloadLen = (static_cast<uint64_t>(extLen[0]) << 8) | extLen[1];
+        } else if (payloadLen == 127) {
+            uint8_t extLen[8];
+            if (!RecvExact(clientSock, reinterpret_cast<char*>(extLen), 8)) return false;
+            payloadLen = 0;
+            for (int i = 0; i < 8; i++) {
+                payloadLen = (payloadLen << 8) | extLen[i];
+            }
+        }
+
+        if (payloadLen > 65536) {
+            Logger::Instance().Error("WebSocket frame payload exceeds limit (64 KB).");
+            return false;
+        }
+
+        // Mask key
+        uint8_t maskKey[4] = { 0, 0, 0, 0 };
+        if (isMasked) {
+            if (!RecvExact(clientSock, reinterpret_cast<char*>(maskKey), 4)) return false;
+        }
+
+        // Read payload bytes completely
+        std::vector<char> buffer(static_cast<size_t>(payloadLen));
+        if (payloadLen > 0) {
+            if (!RecvExact(clientSock, buffer.data(), static_cast<size_t>(payloadLen))) {
+                return false;
+            }
+        }
+
+        // Unmask
+        if (isMasked) {
+            for (size_t i = 0; i < payloadLen; i++) {
+                buffer[i] ^= maskKey[i % 4];
+            }
+        }
+
+        // If Ping (0x9), respond with Pong (0xA) using the exact same unmasked payload
+        if (opcode == 0x9) {
+            std::vector<uint8_t> pongFrame;
+            pongFrame.push_back(0x8A);
+            if (payloadLen < 126) {
+                pongFrame.push_back(static_cast<uint8_t>(payloadLen));
+            } else {
+                pongFrame.push_back(126);
+                pongFrame.push_back(static_cast<uint8_t>((payloadLen >> 8) & 0xFF));
+                pongFrame.push_back(static_cast<uint8_t>(payloadLen & 0xFF));
+            }
+            pongFrame.insert(pongFrame.end(), buffer.begin(), buffer.end());
+            SendExact(clientSock, reinterpret_cast<const char*>(pongFrame.data()), pongFrame.size());
+            continue; // read next application frame
+        }
+
+        // If Pong (0xA), payload has been consumed, loop to read next frame
+        if (opcode == 0xA) {
+            continue;
+        }
+
+        outPayload.assign(buffer.data(), buffer.size());
+        return true;
     }
 
-    outPayload.assign(buffer.data(), buffer.size());
-    return true;
+    return false;
 }
 
 bool WebSocketServer::SendTextMessage(SocketHandle clientSock, const std::string& text) {
     std::vector<uint8_t> frame;
-    frame.reserve(10 + text.size());
+    frame.push_back(0x81); // FIN = 1, Opcode = 1 (Text)
 
-    // Byte 0: FIN (0x80) | Text Opcode (0x01) = 0x81
-    frame.push_back(0x81);
-
-    // Byte 1+: Payload Length (Server-to-client frames are unmasked per RFC 6455)
     size_t len = text.size();
-    if (len <= 125) {
+    if (len < 126) {
         frame.push_back(static_cast<uint8_t>(len));
-    } else if (len <= 65535) {
+    } else if (len <= 0xFFFF) {
         frame.push_back(126);
         frame.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
         frame.push_back(static_cast<uint8_t>(len & 0xFF));
@@ -501,22 +486,26 @@ bool WebSocketServer::SendTextMessage(SocketHandle clientSock, const std::string
         }
     }
 
-    // Payload data
     frame.insert(frame.end(), text.begin(), text.end());
-
     return SendExact(clientSock, reinterpret_cast<const char*>(frame.data()), frame.size());
 }
 
+// Item 15: Concurrency-guarded close to prevent double-closing or race conditions
 void WebSocketServer::CloseClient(SocketHandle clientSock) {
+    bool found = false;
     {
         std::lock_guard<std::mutex> lock(clientsMutex_);
         auto it = std::find(connectedClients_.begin(), connectedClients_.end(), clientSock);
         if (it != connectedClients_.end()) {
             connectedClients_.erase(it);
+            found = true;
         }
     }
-    closesocket(clientSock);
-    Logger::Instance().Info("Client socket closed and unregistered.");
+
+    if (found) {
+        closesocket(clientSock);
+        Logger::Instance().Info("Client socket closed and unregistered cleanly.");
+    }
 }
 
 } // namespace Agent
